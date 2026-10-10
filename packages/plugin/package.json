@@ -71,13 +71,14 @@
   },
   "dependencies": {
     "@spinejit/spine-host": "0.1.0",
-    "@spinejit/spine-sdk": "0.1.0",
-    "typebox": "1.3.7"
+    "@spinejit/spine-sdk": "0.1.0"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "0.87.1"
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "0.87.1"
+    "@earendil-works/pi-coding-agent": "0.87.1",
+    "typebox": "1.3.7"
   }
 }
