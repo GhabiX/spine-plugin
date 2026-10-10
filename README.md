@@ -252,7 +252,7 @@ pi install /absolute/path/to/spine-sdk-plugin/packages/plugin
 
 Rebuild after TypeScript changes, then `/reload` or restart Pi and start a new
 session. Install dependencies before building; the plugin depends on the matching
-SDK/host packages and Pi 0.87.1 rather than bundling them. See the
+SDK/host packages and Pi 1.1.0 rather than bundling them. See the
 [package guide](packages/plugin/README.md#pi-sdk-installation-and-updates).
 
 It registers the four canonical tools, has no browsing slash commands, and

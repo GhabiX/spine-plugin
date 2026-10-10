@@ -18,7 +18,7 @@ Load each extension once. Either order works. Package discovery uses the
 TypeScript paths declared in `pi.extensions`. The compiled `dist` entries remain
 package exports, but loading them directly bypasses the host virtual module.
 These private workspace packages are not published to npm.
-The supported dependency versions are Pi coding-agent and pi-tui 0.87.1.
+The supported dependency versions are Pi coding-agent and pi-tui 1.1.0.
 No Pi-host changes or fullscreen mode are required.
 
 ## Interaction

@@ -7,7 +7,8 @@ Install one package; npm installs the SDK and host dependencies automatically:
 pi install npm:@spinejit/pi-spinejit
 ```
 
-Version `0.1.0` targets Pi `0.87.1`. Pi 1.x compatibility has not been verified.
+Version `0.1.0` is developed and tested against Pi `1.1.0`. The last state developed
+against Pi 0.87.1 is tagged `pi-0.87-final`.
 
 ## Migrating from @spinejit/spine-plugin
 
@@ -74,7 +75,7 @@ Pi and start a new session. A `spine.toml` wording change needs extension
 reactivation, but does not require a TypeScript or WASM rebuild. Normal Pi
 0.87.1 `/new` also reactivates extensions; a tree navigation is not a reload.
 
-The package depends on matching SDK and host packages and Pi 0.87.1. In a local
+The package depends on matching SDK and host packages and Pi 1.1.0. In a local
 checkout, workspace dependencies must already be installed. A packed consumer
 must resolve those dependencies too; the plugin tarball does not bundle them.
 Spawn's default child invocation passes the currently loaded extension module,
