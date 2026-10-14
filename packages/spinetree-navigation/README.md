@@ -21,6 +21,11 @@ These private workspace packages are not published to npm.
 The supported dependency versions are Pi coding-agent and pi-tui 1.1.0.
 No Pi-host changes or fullscreen mode are required.
 
+When SpineTree L1 reports `st` at session startup, navigation does not request
+or show the SDK tree. `/spine-tree` instead points to `/st` and shell
+`st branch/show/context`. This decision is frozen per session and is independent
+of extension load order; without an L1 responder SDK navigation is unchanged.
+
 ## Interaction
 
 - `/spine-tree` selects the current execution node in the bottom tree.

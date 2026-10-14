@@ -389,6 +389,7 @@ test("before_agent_start composes the configured prompt and registers its tool c
 test("context_with_system preserves host messages and restores Spine node roles per request", async () => {
   const pi = mockPi();
   createPiExtension()(pi.api);
+  await pi.emit("session_start", { type: "session_start", reason: "new" }, extensionContext().context);
   const messages = [
     { role: "system", content: "Pi host instructions", timestamp: 1 },
     {

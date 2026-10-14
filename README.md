@@ -317,8 +317,12 @@ the canonical byte/count policy; it only keeps terminal-receipt checks needed
 after child work returns. Pi's own child process stdout/stderr capture remains
 owned by Pi and is outside this plugin boundary.
 
-The Pi deployment profile must load Spine as the final and exclusive context
-reducer and the exclusive compaction owner. The extension intercepts
+In SDK mode the Pi deployment profile must load Spine as the final and exclusive
+context reducer and the exclusive compaction owner. A co-loaded SpineTree L1
+artifact may select st mode at session startup instead; SDK tools are then hidden
+and all SDK context/compaction/navigation hooks are inactive. Discovery and the
+fixed per-session mode contract are described in the
+[package guide](packages/plugin/README.md#spinetree--sdk-session-modes). The extension intercepts
 `session_before_compact`, asks Pi's model registry for the summary, persists a
 typed compact barrier and replacement messages, then publishes the new
 projection before allowing Pi to append its acknowledgement entry. A native
@@ -334,15 +338,14 @@ Offline real-Pi checks cover a pending context request; they do not establish
 safety for every external asynchronous interleaving.
 
 The current Pi entry and `pi-compact-fallback` 0.2.1 share the
-`pi:compaction-owner:v1` activation check. If both are configured, whichever
-loads second is rejected before registering tools or hooks, with a clear
-`Pi compaction plugin conflict` error. Pi can continue with the first plugin;
-experiment launchers must treat loader errors as an invalid configuration.
-Subscriptions belong to the extension runtime and are cleared on reload.
-This requires both updated entries: old fallback 0.2.0 bundles and old Spine
-builds are not covered. Rebuild and reload both entries to use that check; a
-running process retains its loaded extension. Do not stack other compaction
-owners that do not implement this protocol.
+`pi:compaction-owner:v1` check. SDK mode checks ownership at `session_start`,
+after the mode responder is available. A competing owner produces a clear
+`Pi compaction plugin conflict` error; experiment launchers must treat that as
+an invalid configuration. St mode makes no SDK ownership claim. Subscriptions
+belong to the extension runtime and are cleared on reload. Old fallback 0.2.0
+bundles and old Spine builds are not covered. Rebuild and reload both entries;
+a running process retains its loaded extension. Do not stack compaction owners
+that do not implement this protocol.
 
 Archive `durabilityId` is the persist key `archiveRecordId(record)`:
 `attempt_id.value` on `sampling_started` and `commit_id.value` on

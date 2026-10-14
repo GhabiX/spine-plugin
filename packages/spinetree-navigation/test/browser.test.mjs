@@ -123,14 +123,16 @@ test("memory reader advances across sections without joining them into one docum
 function extensionHarness(offers) {
   const commands = new Map();
   const notices = [];
-  let widgetWrites = 0;
-  extension({ registerCommand: (name, command) => commands.set(name, command), events: { emit: (_channel, request) => offers(request) } });
+  let widgetWrites = 0, startup;
+  extension({ on: (_name, handler) => { startup = handler; }, registerCommand: (name, command) => commands.set(name, command),
+    events: { emit: (channel, request) => { if (channel === "spinejit:tree-view:v1") offers(request); } } });
   const ctx = {
-    mode: "tui", hasUI: true,
+    cwd: "/isolated-navigation", mode: "tui", hasUI: true,
     sessionManager: { getSessionId: () => "session", getBranch: () => [] },
     navigateTree: async () => assert.fail("browsing must not switch the execution session"),
     ui: { notify: (text, severity) => notices.push({ text, severity }), setWidget() { widgetWrites++; }, custom() { assert.fail("must not open a custom UI"); } },
   };
+  startup({}, ctx);
   return { commands, ctx, notices, writes: () => widgetWrites };
 }
 
