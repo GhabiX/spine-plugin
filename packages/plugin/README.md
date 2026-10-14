@@ -81,6 +81,26 @@ must resolve those dependencies too; the plugin tarball does not bundle them.
 Spawn's default child invocation passes the currently loaded extension module,
 so the formal `dist` entry is also the explicit child entry.
 
+## SpineTree / SDK session modes
+
+The same Pi configuration may load this package, navigation, and the SpineTree
+L1/native artifact. At `session_start`, the plugin synchronously queries L1 on
+`pi.events` channel `spinetree:mode` with `{ cwd, sessionId, mode? }`. Only L1
+owns discovery; no responder means `sdk`. The decision is frozen for that
+session. Creating a tree mid-session takes effect in a new session, not during
+the current run. Both extension load orders are supported.
+
+In `st` mode every `spine_*` tool is re-registered as `hidden`, so neither the
+model nor codemode/`ctx.executeTool()` can reach it. SDK context, sampling,
+compaction, ownership claims and navigation are inactive. Work uses shell `st`
+and delegate/job workers; their branch caps are the results. In `sdk` mode the
+existing SDK tools, context projection, compaction, Spawn and navigation remain
+the active path. An SDK conversation is not migrated into a st conversation.
+
+Compaction-owner conflict checking occurs at SDK `session_start`, after mode
+selection, rather than factory activation; st sessions never claim SDK ownership.
+A conflicting SDK compaction configuration is still invalid and must not run.
+
 ## Runtime composition
 
 `extendSystemPrompt(base)` composes an original host base with enabled Spine

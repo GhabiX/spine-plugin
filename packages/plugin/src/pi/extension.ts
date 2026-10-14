@@ -67,6 +67,7 @@ import {
 import { buildPiReplayPlan, recoverPiSession, type PiBranchEntry } from "./recovery.js";
 import { SpineTreeDisplay } from "./tree-view.js";
 import { SPINE_TREE_VIEW_REQUEST } from "./tree-view-contract.js";
+import { queryPiSpineMode, type PiSpineMode } from "./session-mode.js";
 import {
   applySpawnTerminal,
   createSpawnBatchView,
@@ -147,6 +148,7 @@ interface ActivePiSession {
 }
 
 interface MutableSessionSlot {
+  mode: PiSpineMode | undefined;
   current: ActivePiSession | null;
   initialization: Promise<ActivePiSession> | null;
   generation: number;
@@ -179,14 +181,9 @@ function activatePiExtension(
   options: CreatePiExtensionOptions,
   publishCommitted?: (record: PostCommitRecord) => Promise<void>,
 ): void {
-  // Shared with pi-compact-fallback. Check before registering any Spine tools
-  // or hooks. Pi invalidates this runtime-scoped subscription on reload.
+  // Ownership is decided at session_start, after every extension factory has
+  // registered its synchronous mode responder. Load order cannot select mode.
   const compactionOwnerEvent = "pi:compaction-owner:v1";
-  const claim: { owner?: string } = {};
-  pi.events.emit(compactionOwnerEvent, claim);
-  if (claim.owner !== undefined) {
-    throw new Error(`Pi compaction plugin conflict: @spinejit/pi-spinejit cannot load with ${claim.owner}. Enable only one compaction plugin.`);
-  }
   const configToml = loadPiSpineConfigToml();
   const runtimeFactory = options.runtimeFactory ?? {
     create: (thread: string) => createNodeSpineRuntime({
@@ -202,6 +199,7 @@ function activatePiExtension(
     default: false,
   });
   const slot: MutableSessionSlot = {
+    mode: undefined,
     current: null,
     initialization: null,
     generation: 0,
@@ -213,8 +211,33 @@ function activatePiExtension(
     samplingPrefix: null,
   };
   registerSpineTools(pi, slot, configToml, options.childInvocation);
+  const modes = new Map<string, PiSpineMode>();
+  pi.on("session_start", (_event, ctx) => {
+    const sessionId = ctx.sessionManager.getSessionId();
+    const mode = modes.get(sessionId) ?? queryPiSpineMode(pi, ctx);
+    modes.set(sessionId, mode);
+    const previousMode = slot.mode;
+    slot.mode = undefined;
+    if (mode === "st") {
+      // Inactive alone is insufficient: codemode/deferred tools remain callable.
+      registerSpineTools(pi, slot, configToml, options.childInvocation, "hidden");
+      registerChildReturnTool(pi, "hidden");
+      slot.generation += 1;
+      disposeCurrent(slot);
+      slot.initialization = null;
+      slot.treeDisplay.reset();
+    } else {
+      const claim: { owner?: string } = {};
+      pi.events.emit(compactionOwnerEvent, claim);
+      if (claim.owner !== undefined && claim.owner !== "@spinejit/pi-spinejit") {
+        throw new Error(`Pi compaction plugin conflict: @spinejit/pi-spinejit cannot load with ${claim.owner}. Enable only one compaction plugin.`);
+      }
+      if (previousMode === "st") registerSpineTools(pi, slot, configToml, options.childInvocation);
+    }
+    slot.mode = mode;
+  });
   pi.events.on(SPINE_TREE_VIEW_REQUEST, (request) => {
-    if (slot.current === null || slot.fault !== null) return;
+    if (slot.mode !== "sdk" || slot.current === null || slot.fault !== null) return;
     slot.treeDisplay.offer(request, slot.generation, slot.current.latestContext.projection);
   });
   registerLifecycleHandlers(
@@ -227,7 +250,7 @@ function activatePiExtension(
     publishCommitted,
   );
   pi.events.on(compactionOwnerEvent, (query) => {
-    (query as { owner?: string }).owner = "@spinejit/pi-spinejit";
+    if (slot.mode === "sdk") (query as { owner?: string }).owner ??= "@spinejit/pi-spinejit";
   });
 }
 
@@ -236,11 +259,13 @@ function registerSpineTools(
   slot: MutableSessionSlot,
   configToml: string,
   childInvocation?: PiChildInvocationFactory,
+  exposure: "direct" | "hidden" = "direct",
 ): void {
   for (const tool of loadCanonicalSpineTools(configToml)) {
     if (tool.name === "spine_spawn") {
       pi.registerTool({
         name: tool.name,
+        exposure,
         label: tool.label,
         description: tool.description,
         parameters: tool.parameters,
@@ -333,6 +358,7 @@ function registerSpineTools(
     }
     pi.registerTool({
       name: tool.name,
+      exposure,
       label: tool.label,
       description: tool.description,
       parameters: tool.parameters,
@@ -432,9 +458,10 @@ function childToolAllowlist(pi: ExtensionAPI): string[] {
   return [...new Set([...pi.getActiveTools(), CHILD_RETURN_TOOL].filter((name) => name.trim().length > 0))];
 }
 
-function registerChildReturnTool(pi: ExtensionAPI): void {
+function registerChildReturnTool(pi: ExtensionAPI, exposure: "direct" | "hidden" = "direct"): void {
   pi.registerTool({
     name: CHILD_RETURN_TOOL,
+    exposure,
     label: "Return Spine Memory",
     description: "Return the complete model-authored terminal memory for this Spawn child.",
     parameters: Type.Object({ memory: Type.String({ minLength: 1 }) }),
@@ -459,6 +486,7 @@ function registerLifecycleHandlers(
 ): void {
   let childMode = false;
   pi.on("session_start", async (_event, ctx) => {
+    if (slot.mode !== "sdk") return;
     childMode = pi.getFlag(CHILD_FLAG) === true;
     if (childMode) {
       registerChildReturnTool(pi);
@@ -472,10 +500,11 @@ function registerLifecycleHandlers(
       slot.compactionAbortCleanup = null;
       slot.samplingPrefix = null;
       await beginSessionInitialization(slot, () => initializeSession(pi, ctx, runtimeFactory, onSessionReady));
-      renderSpineTree(ctx, slot, await requireSession(slot));
+      if (slot.mode === "sdk") renderSpineTree(ctx, slot, await requireSession(slot));
     });
   });
   pi.on("session_tree", async (_event, ctx) => {
+    if (slot.mode !== "sdk") return;
     await guardHook(pi, slot, ctx, { hook: "session_tree", stage: "initialize_session" }, async () => {
       slot.fault = null;
       slot.notified = false;
@@ -484,10 +513,11 @@ function registerLifecycleHandlers(
       slot.compactionAbortCleanup = null;
       slot.samplingPrefix = null;
       await beginSessionInitialization(slot, () => initializeSession(pi, ctx, runtimeFactory, onSessionReady));
-      renderSpineTree(ctx, slot, await requireSession(slot));
+      if (slot.mode === "sdk") renderSpineTree(ctx, slot, await requireSession(slot));
     });
   });
   pi.on("session_shutdown", (_event, ctx) => {
+    if (slot.mode !== "sdk") return;
     // Direct/RPC reload may run while a context handler is suspended. Cancel
     // while its host ctx is still active; after invalidation ctx.abort throws.
     if (!ctx.isIdle()) ctx.abort();
@@ -502,6 +532,7 @@ function registerLifecycleHandlers(
     slot.treeDisplay.reset();
   });
   pi.on("message_end", async (event, ctx) => {
+    if (slot.mode !== "sdk") return;
     await guardHook(pi, slot, ctx, { hook: "message_end", stage: "observe_message" }, async () => {
       const session = await requireSession(slot);
       // A user or custom steering/follow-up message can follow a context-only message that Pi
@@ -514,6 +545,7 @@ function registerLifecycleHandlers(
     });
   });
   pi.on("context", async (_event, ctx): Promise<{ messages?: ContextEvent["messages"] }> => {
+    if (slot.mode !== "sdk") return {};
     try {
       const session = await requireSession(slot);
       await observePersistedPiSources(session, ctx);
@@ -531,16 +563,19 @@ function registerLifecycleHandlers(
       return { messages: [] };
     }
   });
-  pi.on("context_with_system", async (event) => ({
-    messages: projectPiSpineMessages(event.messages as unknown as PiAgentMessage[]) as unknown as ContextEvent["messages"],
-  }));
+  pi.on("context_with_system", async (event) => {
+    if (slot.mode !== "sdk") return;
+    return { messages: projectPiSpineMessages(event.messages as unknown as PiAgentMessage[]) as unknown as ContextEvent["messages"] };
+  });
   pi.on("before_provider_request", async (event, ctx) => {
+    if (slot.mode !== "sdk") return;
     await guardHook(pi, slot, ctx, { hook: "before_provider_request", stage: "begin_sampling" }, async () => {
       slot.samplingPrefix = structuredClone(ctx.sessionManager.getBranch());
       await (await requireSession(slot)).lifecycle.beginSampling(event.payload);
     });
   });
   pi.on("before_agent_start", async (event, ctx) => {
+    if (slot.mode !== "sdk") return;
     const session = await requireSession(slot);
     await observePersistedPiSources(session, ctx);
     if (event.systemPromptOptions === undefined) return;
@@ -549,6 +584,7 @@ function registerLifecycleHandlers(
     );
   });
   pi.on("tool_call", async (event, ctx) => {
+    if (slot.mode !== "sdk") return;
     try {
       const admission = controlToolAdmission(slot, event.toolName, event.input);
       if (admission !== undefined) return admission;
@@ -573,11 +609,13 @@ function registerLifecycleHandlers(
     }
   });
   pi.on("tool_result", async (event, ctx) => {
+    if (slot.mode !== "sdk") return;
     await guardHook(pi, slot, ctx, { hook: "tool_result", stage: "finish_tool_call" }, async () => {
       await (await requireSession(slot)).lifecycle.finishToolCall(event.toolCallId, !event.isError);
     });
   });
   pi.on("turn_end", async (event, ctx) => {
+    if (slot.mode !== "sdk") return;
     const boundary = { hook: "turn_end", stage: "finish_sampling" };
     await guardHook(pi, slot, ctx, boundary, async () => {
       const commit = await (await requireSession(slot)).lifecycle.finishTurn({
@@ -645,6 +683,7 @@ function registerLifecycleHandlers(
       event: SessionBeforeCompactEvent,
       ctx: ExtensionContext,
     ): Promise<{ cancel?: boolean; compaction?: CompactionResult } | undefined> => {
+    if (slot.mode !== "sdk") return;
     let session: ActivePiSession;
     try {
       session = await requireSession(slot);
@@ -714,6 +753,7 @@ function registerLifecycleHandlers(
     }
   });
   pi.on("session_compact", (_event, ctx) => {
+    if (slot.mode !== "sdk") return;
     if (slot.compactionHandled) {
       slot.compactionHandled = false;
       slot.compactionAbortCleanup?.();
