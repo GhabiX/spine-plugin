@@ -33,6 +33,7 @@ import {
   type SpawnRecoveryPolicy,
 } from "../spawn.js";
 import { SpineToolInputError } from "../tools.js";
+import { watchParent } from "./parent-watch.js";
 import type { SpawnTask } from "@spinejit/spine-sdk";
 import {
   buildChildAssignment,
@@ -79,6 +80,9 @@ import {
 } from "./spawn-view.js";
 
 const CHILD_FLAG = "spine-child";
+const PARENT_PID_FLAG = "spine-parent-pid";
+/** Empirical upper bound for Pi's SIGTERM cleanup before the orphan is forced out. */
+const ORPHAN_EXIT_GRACE_MS = 6000;
 const EXTENSION_MODULE_PATH = fileURLToPath(import.meta.url);
 
 export interface PiExtensionRuntimeFactory {
@@ -197,6 +201,10 @@ function activatePiExtension(
     description: "Run as a typed Spine Spawn child",
     type: "boolean",
     default: false,
+  });
+  pi.registerFlag(PARENT_PID_FLAG, {
+    description: "PID of the Spine Spawn parent; the child exits when that process is gone",
+    type: "string",
   });
   const slot: MutableSessionSlot = {
     mode: undefined,
@@ -485,12 +493,23 @@ function registerLifecycleHandlers(
   publishCommitted?: (record: PostCommitRecord) => Promise<void>,
 ): void {
   let childMode = false;
+  let stopParentWatch: (() => void) | null = null;
   pi.on("session_start", async (_event, ctx) => {
     if (slot.mode !== "sdk") return;
     childMode = pi.getFlag(CHILD_FLAG) === true;
     if (childMode) {
       registerChildReturnTool(pi);
       pi.setActiveTools(childActiveTools(pi));
+      // Only a parent that declared its PID can be outlived; a child started by
+      // hand (or in-process in tests) has nothing to bind to.
+      const parentPid = pi.getFlag(PARENT_PID_FLAG);
+      if (typeof parentPid === "string" && parentPid.length > 0) {
+        stopParentWatch ??= watchParent({
+          expectedParent: Number(parentPid),
+          ppid: () => process.ppid,
+          onOrphaned: endOrphanedChild,
+        });
+      }
     }
     await guardHook(pi, slot, ctx, { hook: "session_start", stage: "initialize_session" }, async () => {
       slot.fault = null;
@@ -517,6 +536,8 @@ function registerLifecycleHandlers(
     });
   });
   pi.on("session_shutdown", (_event, ctx) => {
+    stopParentWatch?.();
+    stopParentWatch = null;
     if (slot.mode !== "sdk") return;
     // Direct/RPC reload may run while a context handler is suspended. Cancel
     // while its host ctx is still active; after invalidation ctx.abort throws.
@@ -1133,6 +1154,7 @@ async function executePiChild(
       destPath,
       ...extensionPaths.flatMap((path) => ["--extension", path]),
       `--${CHILD_FLAG}=true`,
+      `--${PARENT_PID_FLAG}=${process.pid}`,
       ...(tools.length === 0 ? [] : ["--tools", tools.join(",")]),
       ...childRuntimeFlags(ctx),
       prompt,
@@ -1378,6 +1400,17 @@ function notifyPiCompactionFailure(ctx: ExtensionContext, cause: unknown): void 
     ? cause.message
     : "Pi compaction failed";
   ctx.ui.notify(message, "error");
+}
+
+/**
+ * The parent that would read this child's terminal memory is gone. Take Pi's own
+ * SIGTERM path (stop tracked tool processes, emit session_shutdown, which aborts
+ * a running turn, then exit); it also covers a child that has not started its
+ * turn yet. The session file stays for recovery.
+ */
+function endOrphanedChild(): void {
+  process.kill(process.pid, "SIGTERM");
+  setTimeout(() => process.exit(1), ORPHAN_EXIT_GRACE_MS).unref();
 }
 
 function isAbortError(cause: unknown): boolean {

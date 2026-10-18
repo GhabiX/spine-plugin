@@ -826,6 +826,7 @@ test("Spawn child invocation inherits parent extensions and preserves the prompt
   assert.equal(childArgs.includes("--no-extensions"), false);
   assert.ok(childArgs.includes("--extension"));
   assert.ok(childArgs.includes("--spine-child=true"));
+  assert.ok(childArgs.includes(`--spine-parent-pid=${process.pid}`));
   assert.ok(childArgs.includes("--tools"));
   const tools = childArgs[childArgs.indexOf("--tools") + 1];
   assert.match(tools, /\bread\b/);
