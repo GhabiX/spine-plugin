@@ -33,17 +33,16 @@ export class PiSamplingLifecycleError extends Error {
   }
 }
 
-/** Admission denial for Open/Close/Next mixed with Spawn in one sampling. Not a lifecycle fault. */
-export class PiSpineToolMixError extends Error {
-  constructor(
-    message = "spine_spawn cannot be mixed with spine_open, spine_close, or spine_next",
-  ) {
-    super(message);
-    this.name = "PiSpineToolMixError";
+/**
+ * Admission denial for a second Spine tool call in one sampling: the core admits
+ * one Spine operation per sampling. Not a lifecycle fault.
+ */
+export class PiSpineToolLimitError extends Error {
+  constructor(staged: SpineToolName) {
+    super(`only one Spine tool call is allowed per model response; ${staged} already ran in this one`);
+    this.name = "PiSpineToolLimitError";
   }
 }
-
-type SpineSamplingToolClass = "tree" | "spawn";
 
 /** Owns the exact one-Pi-provider-turn to one-Spine-sampling transaction mapping. */
 export class PiSamplingLifecycle {
@@ -55,7 +54,7 @@ export class PiSamplingLifecycle {
   #publishedContextVersion = -1;
   #previewInFlight: Promise<void> | null = null;
   #samplingActive = false;
-  #samplingClass: SpineSamplingToolClass | null = null;
+  #staged: SpineToolName | null = null;
   #fault: unknown = null;
 
   constructor(
@@ -191,7 +190,7 @@ export class PiSamplingLifecycle {
       await this.#adapter.beginSampling();
       this.#samplingActive = true;
       this.#executions.clear();
-      this.#samplingClass = null;
+      this.#staged = null;
     });
   }
 
@@ -209,11 +208,10 @@ export class PiSamplingLifecycle {
       });
     }
     const operation = operationFromPiToolCall(toolName, input);
-    const toolClass = spineToolClass(toolName);
-    if (this.#samplingClass !== null && this.#samplingClass !== toolClass) {
-      throw new PiSpineToolMixError();
+    if (this.#staged !== null) {
+      throw new PiSpineToolLimitError(this.#staged);
     }
-    this.#samplingClass = toolClass;
+    this.#staged = toolName;
     await this.#guard(async () => {
       this.#assertSamplingActive();
       if (this.#executions.has(toolCallId)) {
@@ -340,10 +338,6 @@ export function decodeSpawnTasks(input: Record<string, unknown>): SpawnTask[] {
   } catch (cause) {
     throw new PiSamplingLifecycleError("invalid Pi Spine Spawn input", { cause });
   }
-}
-
-function spineToolClass(toolName: SpineToolName): SpineSamplingToolClass {
-  return toolName === "spine_spawn" ? "spawn" : "tree";
 }
 
 function samplingWasCancelled(turn: PiTurnEnd): boolean {

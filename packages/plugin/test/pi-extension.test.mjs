@@ -1410,7 +1410,7 @@ test("WASM-backed extension blocks spawn mixed with open without aborting the se
   assert.equal(openAdmission, undefined);
   assert.deepEqual(spawnAdmission, {
     block: true,
-    reason: "spine_spawn cannot be mixed with spine_open, spine_close, or spine_next",
+    reason: "only one Spine tool call is allowed per model response; spine_open already ran in this one",
   });
   assert.equal(ctx.aborts, 0);
 

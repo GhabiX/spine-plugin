@@ -7,7 +7,7 @@ import {
   operationFromPiToolCall,
   PiSamplingLifecycle,
   PiSamplingLifecycleError,
-  PiSpineToolMixError,
+  PiSpineToolLimitError,
   PiSourceBindings,
 } from "../dist/pi/index.js";
 
@@ -217,7 +217,7 @@ test("Pi lifecycle treats idle and repeated finishTurn as identity", async () =>
   assert.deepEqual(log.at(-1), ["finish-sampling", "completed", undefined]);
 });
 
-test("Pi lifecycle blocks spawn mixed with tree tools without latching a fault", async () => {
+test("Pi lifecycle blocks a second Spine tool in one response without latching a fault", async () => {
   const { lifecycle } = harness();
   const tasks = [
     { summary: "a", prompt: "pa" },
@@ -228,8 +228,8 @@ test("Pi lifecycle blocks spawn mixed with tree tools without latching a fault",
   await assert.rejects(
     lifecycle.registerToolCall("spawn-1", "spine_spawn", { tasks }),
     (error) =>
-      error instanceof PiSpineToolMixError &&
-      /spine_spawn cannot be mixed with spine_open, spine_close, or spine_next/.test(error.message),
+      error instanceof PiSpineToolLimitError &&
+      /only one Spine tool call is allowed per model response; spine_open already ran/.test(error.message),
   );
   assert.equal(lifecycle.fault, null);
   assert.equal(await lifecycle.finishToolCall("open-1", true), true);
@@ -243,7 +243,7 @@ test("Pi lifecycle blocks spawn mixed with tree tools without latching a fault",
   assert.equal(await lifecycle.registerToolCall("spawn-2", "spine_spawn", { tasks }), true);
   await assert.rejects(
     lifecycle.registerToolCall("close-1", "spine_close", { memory: "done" }),
-    PiSpineToolMixError,
+    PiSpineToolLimitError,
   );
   assert.equal(lifecycle.fault, null);
   assert.equal(await lifecycle.finishToolCall("close-1", true), false);
@@ -251,6 +251,20 @@ test("Pi lifecycle blocks spawn mixed with tree tools without latching a fault",
   await lifecycle.finishTurn({
     aborted: false,
     message: { role: "assistant", content: [], stopReason: "toolUse", timestamp: 3 },
+  });
+  assert.equal(lifecycle.fault, null);
+
+  // Two tree operations would conflict at commit and fault the sampling.
+  await lifecycle.beginSampling();
+  assert.equal(await lifecycle.registerToolCall("open-2", "spine_open", { goal: "a" }), true);
+  await assert.rejects(
+    lifecycle.registerToolCall("open-3", "spine_open", { goal: "b" }),
+    PiSpineToolLimitError,
+  );
+  assert.equal(await lifecycle.finishToolCall("open-2", true), true);
+  await lifecycle.finishTurn({
+    aborted: false,
+    message: { role: "assistant", content: [], stopReason: "toolUse", timestamp: 4 },
   });
   assert.equal(lifecycle.fault, null);
 });

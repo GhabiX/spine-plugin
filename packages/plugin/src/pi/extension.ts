@@ -60,7 +60,7 @@ import {
   operationFromPiToolCall,
   PiSamplingLifecycle,
   PiSamplingLifecycleError,
-  PiSpineToolMixError,
+  PiSpineToolLimitError,
   PI_SPINE_TOOL_NAMES,
 } from "./lifecycle.js";
 import {
@@ -579,7 +579,7 @@ function registerLifecycleHandlers(
       );
       return undefined;
     } catch (cause) {
-      if (cause instanceof PiSpineToolMixError) {
+      if (cause instanceof PiSpineToolLimitError) {
         return { block: true, reason: cause.message };
       }
       if (cause instanceof PiSamplingLifecycleError && cause.cause instanceof SpineToolInputError) {
