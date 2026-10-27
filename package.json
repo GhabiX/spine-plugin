@@ -10,10 +10,10 @@
     "node": ">=22.19.0"
   },
   "scripts": {
-    "build": "npm run build -w @spinejit/spine-sdk && npm run build -w @spinejit/spine-host && npm run build -w @spinejit/pi-spinejit && npm run build -w @spinejit/spinetree-navigation",
+    "build": "npm run build -w @spinejit/spine-sdk && npm run build -w @spinejit/spine-host && npm run build -w @spinejit/pi-spinejit && npm run build -w @spinejit/spinetree-navigation && npm run build -w @spinejit/dsh-spinejit",
     "build:wasm-node": "npm run build:wasm-node -w @spinejit/spine-sdk",
-    "check": "npm run build -w @spinejit/spine-sdk && npm run check -w @spinejit/spine-sdk && npm run build -w @spinejit/spine-host && npm run check -w @spinejit/spine-host && npm run check -w @spinejit/pi-spinejit && npm run check -w @spinejit/spinetree-navigation",
-    "test": "npm run test -w @spinejit/spine-sdk && npm run test -w @spinejit/spine-host && npm run test -w @spinejit/pi-spinejit && npm run test -w @spinejit/spinetree-navigation",
+    "check": "npm run build -w @spinejit/spine-sdk && npm run check -w @spinejit/spine-sdk && npm run build -w @spinejit/spine-host && npm run check -w @spinejit/spine-host && npm run check -w @spinejit/pi-spinejit && npm run check -w @spinejit/spinetree-navigation && npm run check -w @spinejit/dsh-spinejit",
+    "test": "npm run test -w @spinejit/spine-sdk && npm run test -w @spinejit/spine-host && npm run test -w @spinejit/pi-spinejit && npm run test -w @spinejit/spinetree-navigation && npm run test -w @spinejit/dsh-spinejit",
     "test:wasm-golden": "node scripts/verify-wasm-golden.mjs"
   },
   "devDependencies": {
