@@ -17,7 +17,7 @@ async function scenario(replies, drive) {
     return {
       requests: dsh.adapter.requests.map(shown),
       ends: dsh.events(agent).filter((event) => event.type === "turn/end").map((event) => event.data.reason.kind),
-      archive: dsh.events(agent).filter((event) => event.type === "plugin:spinejit/archive").map((event) => event.data.record.type),
+      samplings: dsh.events(agent).filter((event) => event.type === "developer/message" && event.data.message.source.sampling === true).length,
       events: dsh.events(agent),
     };
   } finally {
@@ -36,7 +36,7 @@ test("Open shows the node; Close replaces it with its memory", async () => {
     ["user: [U1]\nstart", node("1.1", "inspect"), call("spine_open", { goal: "inspect" }), staged("spine_open")],
     ["user: [U1]\nstart", memory("1.1", "found it"), call("spine_close", { memory: "found it" }), staged("spine_close")],
   ]);
-  assert.deepEqual(run.archive, Array(3).fill(["sampling_started", "sampling_commit"]).flat());
+  assert.equal(run.samplings, 3);
 });
 
 test("Next, nesting and a second user turn: Close keeps user messages, replies and child memories", async () => {
@@ -111,9 +111,23 @@ test("a failed request and a cancelled one leave the plan as it was", async () =
     assert.deepEqual(run.requests[2], [
       "user: [U1]\nstart", node("1.1", "A"), call("spine_open", { goal: "A" }), staged("spine_open"), "user: [U2]\nagain",
     ]);
-    // The interrupted sampling began but never committed.
-    assert.deepEqual(run.archive, ["sampling_started", "sampling_commit", "sampling_started", "sampling_started", "sampling_commit"]);
+    assert.equal(run.samplings, 3);
   }
+});
+
+test("text cut off at max tokens is no reply: Close folds it into the node", async () => {
+  const run = await scenario(
+    [[["spine_open", { goal: "A" }]], { text: "partial", finish: "max-tokens" }, [["spine_close", { memory: "m" }]], "done"],
+    async (dsh) => {
+      const agent = await dsh.run("start");
+      await dsh.send(agent, "more");
+      return agent;
+    },
+  );
+  assert.deepEqual(run.ends, ["max-tokens", "completed"]);
+  assert.deepEqual(run.requests[3], [
+    "user: [U1]\nstart", "user: [U2]\nmore", memory("1.1", "m"), call("spine_close", { memory: "m" }), staged("spine_close"),
+  ]);
 });
 
 test("bad Spine input and a second Spine call are tool errors; the agent keeps working", async () => {

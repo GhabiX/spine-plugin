@@ -2,18 +2,22 @@ import {
   createDeveloperMessage,
   createUserMessage,
   freezeMessage,
+  lastAssistantStreamChunk,
   type ContentBlock,
   type DeveloperMessage,
   type Message,
   type UserMessage,
 } from "@deepseek-ai/dsh-llm";
-import type { SessionEvent } from "@deepseek-ai/dsh-session";
+import { isAppendSurfaceEvent, type SessionEvent } from "@deepseek-ai/dsh-session";
 import type { SourceCharacter } from "@spinejit/spine-sdk";
 
 declare module "@deepseek-ai/dsh-llm" {
   interface MessageSourceMap {
-    /** Context this plugin writes: node descriptors, memory, births and empty slots. */
-    spine: { kind: "spine" };
+    /**
+     * Context this plugin writes: node descriptors, memory, births and empty
+     * slots. `sampling` marks the slot that begins a Spine sampling.
+     */
+    spine: { kind: "spine"; sampling?: true };
   }
 }
 
@@ -108,6 +112,17 @@ export function emptySlot(): DeveloperMessage {
   return createDeveloperMessage({ content: [], source: { kind: "spine" } });
 }
 
+/** The empty slot a sampling appends first, marking in the log where it began. */
+export function samplingSlot(): DeveloperMessage {
+  return createDeveloperMessage({ content: [], source: { kind: "spine", sampling: true } });
+}
+
+export function beginsSampling(event: SessionEvent): boolean {
+  if (event.type !== "developer/message" || !isAppendSurfaceEvent(event)) return false;
+  const source = event.data.message.source;
+  return source.kind === "spine" && source.sampling === true;
+}
+
 /** A Spine item (node descriptor, memory, birth) as a model-visible user message. */
 export function spineMessage(text: string): UserMessage {
   return createUserMessage({ content: [{ type: "text", text }], source: { kind: "spine" } });
@@ -118,10 +133,11 @@ export function spineText(message: Message): string | null {
   return message.content.length === 0 ? null : contentText(message.content);
 }
 
-/** The agent's reply to the user: complete, with text, and calling no tool. */
+/** The agent's reply to the user: the response stopped by itself, with text and no tool call. */
 function isReply(event: Extract<SessionEvent, { type: "assistant/message" }>): boolean {
   const content = event.data.message.content;
-  return event.data.interrupted !== true &&
+  return lastAssistantStreamChunk(event.data.stream, "finish")?.reason.kind === "stop" &&
+    event.data.interrupted !== true &&
     content.every((block) => block.type !== "tool-call") &&
     content.some((block) => block.type === "text" && block.text.trim().length > 0);
 }

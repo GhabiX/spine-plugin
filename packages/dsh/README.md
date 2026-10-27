@@ -13,7 +13,8 @@ loads it as the Cordis plugin `spinejit`.
   completed if a response was logged, failed otherwise.
 - Before each request streams, the plugin appends two empty developer slots.
   They derive no model message and leave room for what the sampling's Open,
-  Close or Next puts in front of its response.
+  Close or Next puts in front of its response. The first is marked
+  (`source.sampling`): it records in the log where the sampling began.
 - When the next step opens (`agent/request`), the plugin edits the surface into
   the plan the core last published, using standard surface replacements. The
   edits are a pure function of the surface and the plan (`src/projection.ts`),
@@ -26,13 +27,17 @@ loads it as the Cordis plugin `spinejit`.
 - Before a request streams, the plugin checks that the surface already shows
   the plan with the right user numbers, and refuses the request otherwise.
 - Spine tools only stage their operation, and a model response may carry one
-  Spine tool call; a second one is a tool error. Archive records are stored as
-  `plugin:spinejit/archive` session records.
-- A resumed session rebuilds its Spine state from the log alone: its sources
-  and archive records, in log order, are what the core observed and committed,
-  so the plugin replays them. A sampling that began and never committed replays
-  as abandoned. A session whose conversation started without this plugin is
-  refused: its user messages carry no `[U#]`.
+  Spine tool call; a second one is a tool error. A reply is a response that
+  stopped by itself with text and no tool call; text cut off at max tokens is
+  an ordinary assistant message.
+- The session log is the only record of Spine state; the plugin writes no
+  archive of its own (DSH reserves plugin records for its own experimental
+  packages). Where each sampling began, the Spine call whose result was not an
+  error and what the log shows of the response decide every commit. A resumed
+  session runs the same lifecycle over its log: a sampling settles before the
+  next request, step or turn, as it did live, or at the end of the log. A
+  session whose conversation started without this plugin is refused: its user
+  messages carry no `[U#]`.
 
 ## Not yet
 

@@ -1,18 +1,10 @@
 import type { Agent, PreStepDecision } from "@deepseek-ai/dsh-agent";
+import { isAppendSurfaceEvent, type SessionEvent, type SessionSeq } from "@deepseek-ai/dsh-session";
+import type { EpochOrdinalId, FeatureFlag, Terminal } from "@spinejit/spine-sdk";
 import {
-  appendPluginRecord,
-  isAppendSurfaceEvent,
-  pluginRecordOf,
-  type SessionEvent,
-  type SessionSeq,
-} from "@deepseek-ai/dsh-session";
-import type { EpochOrdinalId, FeatureFlag, ReplayItem, SamplingArchiveRecord, Terminal } from "@spinejit/spine-sdk";
-import {
-  archiveRecordId,
   createHostAdapter,
+  isSpineToolName,
   operationFromSpineToolCall,
-  SPINE_HOST_PROTOCOL_SCHEMA,
-  type HostArchiveEnvelope,
   type SpineHostAdapter,
   type SpineToolName,
 } from "@spinejit/spine-sdk/host";
@@ -21,24 +13,17 @@ import { createNodeSpineRuntime } from "@spinejit/spine-sdk/node";
 import {
   anchored,
   anchorOf,
+  beginsSampling,
   emptySlot,
   eventMessage,
   isUserSource,
+  samplingSlot,
   sourceCharacter,
   SpineDshError,
   spineText,
   surfaceRole,
 } from "./events.js";
 import { applySurfaceEdits, planItems, surfaceEdits, type PlanItem, type SurfaceNode } from "./projection.js";
-
-declare module "@deepseek-ai/dsh-session" {
-  interface PluginRecordMap {
-    /** One Spine sampling archive record, durable before its commit takes effect. */
-    "plugin:spinejit/archive": HostArchiveEnvelope;
-  }
-}
-
-const ARCHIVE_RECORD = "plugin:spinejit/archive";
 
 export const SPINE_FEATURES: FeatureFlag[] = ["jit"];
 
@@ -54,18 +39,21 @@ export class SpineToolLimitError extends Error {
 }
 
 interface Sampling {
-  /** First log seq after the sampling began. */
+  /** Log seq of the slot that began the sampling. */
   from: number;
   staged: SpineToolName | null;
 }
 
 /**
  * The Spine state of one DSH agent. One main-loop model request is one Spine
- * sampling; it settles at the next pre-step, at turn-stopping, at a request
- * error, or when the agent is disposed. The surface follows the plan the core
- * last published, edited when the next step opens. The session log alone
- * rebuilds this state: its sources and archive records, in log order, are
- * exactly what the core observed and committed.
+ * sampling: it begins with a marked empty slot in front of the response and
+ * settles at the next pre-step, at turn-stopping, at a request error, or when
+ * the agent is disposed. The surface follows the plan the core last published,
+ * edited when the next step opens.
+ *
+ * The session log is the only record of this state. Where each sampling began,
+ * which Spine call it staged and what the log shows of its response decide
+ * every commit, so a resumed agent runs the same lifecycle over the log.
  */
 export class SpineAgent {
   readonly #agent: Agent;
@@ -73,7 +61,7 @@ export class SpineAgent {
   #adapter!: SpineHostAdapter;
   /** Every session event seen, by seq. */
   readonly #events = new Map<number, SessionEvent>();
-  /** Logged sources the core has not observed yet. */
+  /** Logged sources the core has not observed yet, in log order. */
   #unobserved: SessionEvent[] = [];
   readonly #sourceSeqs = new Map<string, SessionSeq>();
   #userSources = 0;
@@ -97,9 +85,8 @@ export class SpineAgent {
         // DSH has no ownership registry. Another writer that rewrites conversation
         // context moves a plan source off the surface, and the projection faults.
         claimOwnership: async () => {},
-        persistArchive: async (entry) => {
-          appendPluginRecord(agent.session, ARCHIVE_RECORD, entry);
-        },
+        // Every fact a commit derives from is already in the session log.
+        persistArchive: async () => {},
         context: {
           materialize: async (context) => planItems(context, (id) => spine.#seqOf(id), spine.#nodePrompt),
           publishAtomic: async (context) => {
@@ -110,9 +97,7 @@ export class SpineAgent {
       dispose: () => runtime.dispose(),
     });
     // A resumed session brings its log as seed events, which are never published.
-    const events = agent.session.snapshotEvents();
-    for (const event of events) spine.#events.set(event.seq, event);
-    if (agent.session.surface.nodes.length > 0) await spine.#recover(events);
+    await spine.#recover(agent.session.snapshotEvents());
     return spine;
   }
 
@@ -154,15 +139,15 @@ export class SpineAgent {
       if (this.#sampling !== null) {
         throw new SpineDshError("a model request started before the previous Spine sampling settled");
       }
-      if ((await this.#observe()) > 0 || this.#plan === null) await this.#adapter.previewAndPublish();
+      await this.#prepare();
       this.#assertSurfaceShowsPlan();
-      await this.#adapter.beginSampling();
       const session = this.#agent.session;
-      this.#sampling = { from: session.seq, staged: null };
+      await this.#begin(session.seq);
       // Two empty slots before the response: room for what this sampling's
       // Open, Close or Next puts in front of it (Next = Close then Open).
-      for (let slot = 0; slot < 2; slot += 1) {
-        session.append("developer/message", { turn: this.#turn, step: this.#step, message: emptySlot() }, { surfaceOp: "append" });
+      // The first marks in the log where the sampling began.
+      for (const message of [samplingSlot(), emptySlot()]) {
+        session.append("developer/message", { turn: this.#turn, step: this.#step, message }, { surfaceOp: "append" });
       }
     });
   }
@@ -184,52 +169,73 @@ export class SpineAgent {
 
   /** Settle the open sampling, if any, from what the log says happened to it. */
   async settle(): Promise<void> {
-    const sampling = this.#sampling;
-    if (sampling === null) return;
-    await this.#guard(async () => {
-      await this.#observe();
-      const outcome = this.#outcome(sampling);
-      await this.#adapter.finishSampling(outcome.terminal, outcome.inputTokens);
-      this.#sampling = null;
-    });
+    await this.#settle(this.#agent.session.seq);
   }
 
   dispose(): void {
     this.#adapter.dispose();
   }
 
-  /** Replay the log into the core: each source as observed, each archive record as persisted. */
+  /**
+   * Run the sampling lifecycle over a logged session, in log order. Each
+   * sampling begins at its marked slot, stages the Spine call whose result was
+   * not an error, and settles where the live agent settled it: before the next
+   * request, step or turn, or at the end of the log.
+   */
   async #recover(events: readonly SessionEvent[]): Promise<void> {
-    const inputs: ReplayItem[] = [];
-    const sources = new Set<number>();
+    const calls = new Map<string, Extract<SessionEvent, { type: "tool/call" }>>();
     for (const event of events) {
-      const record = pluginRecordOf(event);
-      if (record?.type === ARCHIVE_RECORD) {
-        inputs.push({ type: "archive", record: archivedSampling(record.data) });
-        continue;
+      if (beginsSampling(event) || event.type === "step/start" || event.type === "turn/start") {
+        await this.#settle(event.seq);
       }
-      if (!isAppendSurfaceEvent(event) || surfaceRole(event) !== "source") continue;
-      if (isUserSource(event)) {
-        if (anchorOf(eventMessage(event)) === null) {
-          throw new SpineDshError(`session ${this.#agent.id} started without Spine: its user messages carry no [U#]`);
+      this.accept(event);
+      if (isUserSource(event) && anchorOf(eventMessage(event)) === null) {
+        throw new SpineDshError(`session ${this.#agent.id} started without Spine: its user messages carry no [U#]`);
+      }
+      if (beginsSampling(event)) {
+        await this.#guard(async () => {
+          await this.#prepare();
+          await this.#begin(event.seq);
+        });
+      } else if (event.type === "tool/call" && isSpineToolName(event.data.name)) {
+        calls.set(event.data.callId, event);
+      } else if (event.type === "tool/result" && event.data.message.isError !== true) {
+        const call = calls.get(event.data.message.toolCallId);
+        if (call !== undefined && isSpineToolName(call.data.name)) {
+          await this.stage(call.data.name, call.data.callId, JSON.parse(call.data.arguments) as Record<string, unknown>);
         }
-        this.#userSources += 1;
       }
-      inputs.push({ type: "source", character: sourceCharacter(event) });
-      sources.add(event.seq);
     }
-    await this.#adapter.replayWithSources(inputs, async (snapshot) => {
-      for (const cell of snapshot.cells) {
-        if (!sources.has(cell.boundary)) throw new SpineDshError(`Spine replayed source ${cell.boundary}, which is not a logged source`);
-        this.#sourceSeqs.set(sourceKey(cell.source_id), cell.boundary as SessionSeq);
-      }
+    await this.settle();
+  }
+
+  /** Observe every logged source and make sure a plan is published for it. */
+  async #prepare(): Promise<void> {
+    if ((await this.#observe(Infinity)) > 0 || this.#plan === null) await this.#adapter.previewAndPublish();
+  }
+
+  async #begin(from: number): Promise<void> {
+    await this.#adapter.beginSampling();
+    this.#sampling = { from, staged: null };
+  }
+
+  /** Settle the open sampling with the log before `to`. */
+  async #settle(to: number): Promise<void> {
+    const sampling = this.#sampling;
+    if (sampling === null) return;
+    await this.#guard(async () => {
+      await this.#observe(to);
+      const outcome = this.#outcome(sampling, to);
+      await this.#adapter.finishSampling(outcome.terminal, outcome.inputTokens);
+      this.#sampling = null;
     });
   }
 
-  async #observe(): Promise<number> {
-    const events = this.#unobserved;
+  /** Observe the unobserved sources logged before `to`. */
+  async #observe(to: number): Promise<number> {
+    const count = this.#unobserved.findIndex((event) => event.seq >= to);
+    const events = this.#unobserved.splice(0, count < 0 ? this.#unobserved.length : count);
     if (events.length === 0) return 0;
-    this.#unobserved = [];
     const ids = await this.#adapter.observeSources(events.map(sourceCharacter));
     if (ids.length !== events.length) {
       throw new SpineDshError(`Spine admitted ${ids.length} sources for ${events.length} events`);
@@ -276,10 +282,10 @@ export class SpineAgent {
   }
 
   /** Cancelled if the turn aborted; completed if a response was logged; failed otherwise. */
-  #outcome(sampling: Sampling): { terminal: Terminal; inputTokens?: number } {
+  #outcome(sampling: Sampling, to: number): { terminal: Terminal; inputTokens?: number } {
     let terminal: Terminal = "failed";
     let inputTokens: number | undefined;
-    for (let seq = sampling.from; seq < this.#agent.session.seq; seq += 1) {
+    for (let seq = sampling.from; seq < to; seq += 1) {
       const event = this.#events.get(seq);
       if (event?.type === "assistant/message") {
         terminal = event.data.interrupted === true ? "cancelled" : "completed";
@@ -300,16 +306,6 @@ export class SpineAgent {
       throw new SpineDshError("Spine context fault", { cause });
     }
   }
-}
-
-/** A stored archive record, checked as its owner must check restored plugin data. */
-function archivedSampling(data: unknown): SamplingArchiveRecord {
-  const entry = data as Partial<HostArchiveEnvelope> | null;
-  if (entry?.schema !== SPINE_HOST_PROTOCOL_SCHEMA || entry.record === undefined ||
-    entry.durabilityId !== archiveRecordId(entry.record)) {
-    throw new SpineDshError("a stored Spine archive record is malformed");
-  }
-  return entry.record;
 }
 
 function sourceKey(id: EpochOrdinalId): string {

@@ -19,8 +19,9 @@ export class ScriptedAdapter extends LlmAdapter {
 
   /**
    * @param replies one per request: a string is text, an array is tool calls
-   *   `[name, input]`, `{ fail }` throws that message, `{ hang: true }` waits for
-   *   the request to be aborted, and a function of the request returns the reply.
+   *   `[name, input]`, `{ text, finish }` is text that ends with that finish
+   *   kind, `{ fail }` throws that message, `{ hang: true }` waits for the
+   *   request to be aborted, and a function of the request returns the reply.
    */
   constructor(replies) {
     super();
@@ -37,8 +38,9 @@ export class ScriptedAdapter extends LlmAdapter {
       await new Promise((resolve) => request.signal.addEventListener("abort", resolve, { once: true }));
       throw request.signal.reason;
     }
-    const blocks = typeof reply === "string"
-      ? [{ type: "text", text: reply }]
+    const text = typeof reply === "string" ? reply : reply.text;
+    const blocks = text !== undefined
+      ? [{ type: "text", text }]
       : reply.map(([name, input], index) => ({
         type: "tool-call",
         id: `call-${this.requests.length}-${index}`,
@@ -49,7 +51,7 @@ export class ScriptedAdapter extends LlmAdapter {
       yield { type: "block-start", index, blockType: block.type };
       yield { type: "block-end", index, block };
     }
-    yield { type: "finish", reason: { kind: typeof reply === "string" ? "stop" : "tool-calls" } };
+    yield { type: "finish", reason: { kind: reply.finish ?? (text !== undefined ? "stop" : "tool-calls") } };
   }
 }
 
