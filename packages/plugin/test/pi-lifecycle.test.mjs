@@ -169,20 +169,16 @@ test("Pi lifecycle maps validated transition tools and finishes typed executions
   ]);
 });
 
-test("Pi lifecycle stages Spawn only after terminal results and abort wins terminal mapping", async () => {
+test("Pi lifecycle stages Spawn with its tasks at tool_call and abort wins terminal mapping", async () => {
   const { log, lifecycle } = harness();
   const tasks = [
     { summary: "child-a", prompt: "do child work a" },
     { summary: "child-b", prompt: "do child work b" },
   ];
-  const results = [
-    { ordinal: 0, outcome: "completed", memory_body: "child memory a" },
-    { ordinal: 1, outcome: "completed", memory_body: "child memory b" },
-  ];
   await lifecycle.beginSampling();
   await lifecycle.registerToolCall("spawn-1", "spine_spawn", { tasks });
-  assert.equal(log.some(([kind]) => kind === "stage"), false);
-  await lifecycle.stageSpawn("spawn-1", tasks, results);
+  const staged = log.find(([kind]) => kind === "stage");
+  assert.deepEqual(staged.slice(1), ["spawn-1", "spawn-1", { type: "spawn", tasks }]);
   await lifecycle.finishToolCall("spawn-1", true);
   await lifecycle.finishTurn({
     aborted: true,

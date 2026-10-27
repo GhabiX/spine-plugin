@@ -1,4 +1,4 @@
-import type { NodeSnapshot } from "@spinejit/spine-sdk";
+import type { MemorySlot, NodeSnapshot } from "@spinejit/spine-sdk";
 import type { SpineTreeSnapshot } from "@spinejit/pi-spinejit/pi/tree-view";
 import type { SpineTreeSpawnOutcome } from "@spinejit/pi-spinejit/pi/tree-style";
 
@@ -27,7 +27,7 @@ export function createNavigationData(snapshot: SpineTreeSnapshot): NavigationDat
     id: id(node.id), parent: node.parent === null ? null : id(node.parent),
     children: node.children.map(id), summary: node.summary ?? (node.kind === "RootEpoch" ? "Session epoch" : "Task"),
     status: node.status, kind: node.kind,
-    spawnOutcome: spawnOutcome(node),
+    spawnOutcome: node.spawn_outcome,
   }));
   return {
     nodes, cursor: id(snapshot.cursor),
@@ -35,22 +35,12 @@ export function createNavigationData(snapshot: SpineTreeSnapshot): NavigationDat
       const node = rawNodes.get(nodeId);
       if (node === undefined) return ["Node is unavailable in this snapshot."];
       const slots = node.memory ?? [];
-      if (full) return slots.length === 0 ? [noMemory(node)] : slots.map(slot => {
-        if ("Summary" in slot) {
-          const s = slot.Summary;
-          return `### Memory · ${id(s.owner_node)} · source ${s.source.start}–${s.source.end}\n\n${s.body}`;
-        }
-        if ("User" in slot) {
-          const u = slot.User;
-          return `### User evidence · ${id(u.owner_node)} · anchor ${u.anchor}\n\nRole: ${u.message.role}; boundary: ${u.message.boundary}\n\n${u.message.content}`;
-        }
-        return spawnText(slot.SpawnEvidence);
-      });
+      if (full) return slots.length === 0 ? [noMemory(node)] : slots.map(slot => slotText(slot, rawNodes));
+      if (node.kind === "Spawn") return slots.map(slot => slotText(slot, rawNodes));
       const own = slots.flatMap(slot => "Summary" in slot && id(slot.Summary.owner_node) === nodeId ? [slot.Summary.body] : []);
-      const evidence = slots.flatMap(slot => "SpawnEvidence" in slot && id(slot.SpawnEvidence.owner_node) === nodeId ? [spawnText(slot.SpawnEvidence)] : []);
       // Keep each owned summary as its own section so the browser can render
       // only the section currently in view, even when a node has multiple summaries.
-      return [...evidence, ...(own.length === 0 ? [noMemory(node)] : own)];
+      return own.length === 0 ? [noMemory(node)] : own;
     },
     memoryText(nodeId, full = false) {
       return this.memorySections(nodeId, full).join("\n\n---\n\n");
@@ -61,14 +51,25 @@ export function createNavigationData(snapshot: SpineTreeSnapshot): NavigationDat
 function noMemory(node: NodeSnapshot): string {
   return `No final memory for this node (${node.status}).`;
 }
-function spawnText(s: { owner_node: number[]; task: { summary: string; prompt: string }; outcome: string; diagnostic: string | null; execution_ref: string | null; source: { start: number; end: number } }): string {
-  return `### Spawn · ${id(s.owner_node)} · ${s.outcome}\n\n${s.task.summary}\n\n${s.task.prompt}\n\nSource: ${s.source.start}–${s.source.end}${s.diagnostic === null ? "" : `\n\nDiagnostic: ${s.diagnostic}`}${s.execution_ref === null ? "" : `\n\nExecution: ${s.execution_ref}`}`;
-}
-
-function spawnOutcome(node: NodeSnapshot): SpineTreeSpawnOutcome | null {
-  const owner = id(node.id);
-  for (const slot of node.memory ?? []) {
-    if ("SpawnEvidence" in slot && id(slot.SpawnEvidence.owner_node) === owner) return slot.SpawnEvidence.outcome;
+function slotText(slot: MemorySlot, nodes: ReadonlyMap<string, NodeSnapshot>): string {
+  if ("Summary" in slot) {
+    const s = slot.Summary;
+    return `### Memory · ${id(s.owner_node)} · source ${s.source.start}–${s.source.end}\n\n${s.body}`;
   }
-  return null;
+  if ("User" in slot) {
+    const u = slot.User;
+    return `### User evidence · ${id(u.owner_node)} · anchor ${u.anchor}\n\nRole: ${u.message.role}; boundary: ${u.message.boundary}\n\n${u.message.content}`;
+  }
+  if ("Birth" in slot) {
+    const b = slot.Birth;
+    const outcome = nodes.get(id(b.owner_node))?.spawn_outcome ?? "running";
+    return `### Spawn · ${id(b.owner_node)} · ${outcome}\n\n${b.task.summary}\n\n${b.task.prompt}`;
+  }
+  if ("Arrival" in slot) {
+    const a = slot.Arrival.arrival;
+    const body = a.outcome === "completed" ? a.memory : `Diagnostic: ${a.diagnostic}`;
+    return `### Arrival · ${id(a.producer)} · ${a.outcome} · received in ${id(slot.Arrival.owner_node)}\n\n${body}`;
+  }
+  const r = slot.Reply;
+  return `### Reply · ${id(r.owner_node)}\n\n${r.message.content}`;
 }

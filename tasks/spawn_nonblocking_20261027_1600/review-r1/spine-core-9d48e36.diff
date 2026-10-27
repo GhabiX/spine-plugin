@@ -1,0 +1,1779 @@
+diff --git a/codex-rs/spine-core/src/compiler.rs b/codex-rs/spine-core/src/compiler.rs
+index 20ec05b3f2..ff4308a676 100644
+--- a/codex-rs/spine-core/src/compiler.rs
++++ b/codex-rs/spine-core/src/compiler.rs
+@@ -42,7 +42,7 @@ impl SpineCompiler {
+             event.boundary(),
+             event.retained_bytes(),
+         )?;
+-        let projection = self.reducer.apply(event);
++        let projection = self.reducer.apply(event)?;
+         validate_projection(&projection)?;
+         self.projection = projection;
+         Ok(())
+@@ -57,6 +57,7 @@ impl SpineCompiler {
+         span: RawSpan,
+         retained_bytes: usize,
+         facts: &[&ExecutedSpineFact],
++        replies: Vec<crate::Message>,
+         open_input_tokens: Option<u64>,
+     ) -> Result<(), SamplingCompileError> {
+         let event = RolloutEvent::SourceSpan {
+@@ -71,7 +72,7 @@ impl SpineCompiler {
+         .map_err(SamplingCompileError::Spine)?;
+         let projection = self
+             .reducer
+-            .apply_sampling(span, facts, open_input_tokens)
++            .apply_sampling(span, facts, replies, open_input_tokens)
+             .map_err(SamplingCompileError::Transition)?;
+         validate_projection(&projection).map_err(SamplingCompileError::Spine)?;
+         self.projection = projection;
+@@ -145,6 +146,12 @@ pub enum SpineError {
+         max: usize,
+         actual: usize,
+     },
++    InvalidArrival(crate::SpawnValidationError),
++    UnknownSpawnProducer(crate::NodeId),
++    DuplicateArrival(crate::NodeId),
++    /// Compact requires every birth of the epoch to have arrived.
++    UnarrivedSpawns(Vec<crate::NodeId>),
++    ArrivalInsideSampling(RawBoundary),
+ }
+ 
+ impl fmt::Display for SpineError {
+@@ -158,6 +165,26 @@ impl fmt::Display for SpineError {
+             Self::ContextLimit { kind, max, actual } => {
+                 write!(formatter, "Spine {kind} is {actual}; maximum is {max}")
+             }
++            Self::InvalidArrival(error) => {
++                write!(formatter, "invalid Spine spawn arrival: {error}")
++            }
++            Self::UnknownSpawnProducer(producer) => write!(
++                formatter,
++                "Spine spawn arrival names {producer}, which is not a birth of the current epoch"
++            ),
++            Self::DuplicateArrival(producer) => {
++                write!(formatter, "Spine spawn {producer} has already arrived")
++            }
++            Self::ArrivalInsideSampling(boundary) => write!(
++                formatter,
++                "Spine spawn arrival at boundary {} falls inside a sampling",
++                boundary.0
++            ),
++            Self::UnarrivedSpawns(nodes) => write!(
++                formatter,
++                "spawned children have not arrived: {}",
++                crate::reducer::display_nodes(nodes)
++            ),
+         }
+     }
+ }
+diff --git a/codex-rs/spine-core/src/context_char.rs b/codex-rs/spine-core/src/context_char.rs
+index 4bc6c4046b..0199f4828e 100644
+--- a/codex-rs/spine-core/src/context_char.rs
++++ b/codex-rs/spine-core/src/context_char.rs
+@@ -3,6 +3,7 @@ use crate::ContextLabel;
+ use crate::Message;
+ use crate::RawBoundary;
+ use crate::RolloutEvent;
++use crate::SpawnArrival;
+ use crate::TokenUsageSample;
+ use std::fmt;
+ 
+@@ -20,6 +21,12 @@ pub enum SpineChar {
+         boundary: RawBoundary,
+         item: ContextItem,
+     },
++    /// A spawned child's final result, admitted as an external input. The
++    /// host renders it from its own native item.
++    Arrival {
++        boundary: RawBoundary,
++        arrival: SpawnArrival,
++    },
+ }
+ 
+ /// A zero-width observation that changes Spine state without adding a context
+@@ -44,7 +51,9 @@ impl SpineChar {
+     pub fn boundary(&self) -> RawBoundary {
+         match self {
+             Self::Message(message) => message.boundary,
+-            Self::Opaque { boundary } | Self::Synthetic { boundary, .. } => *boundary,
++            Self::Opaque { boundary }
++            | Self::Synthetic { boundary, .. }
++            | Self::Arrival { boundary, .. } => *boundary,
+         }
+     }
+ 
+@@ -180,7 +189,10 @@ impl SpineCharParser {
+         match character {
+             SpineChar::Message(message) => {
+                 self.push_cell(SpineChar::Message(message.clone()));
+-                if message.role == crate::MessageRole::Assistant {
++                if matches!(
++                    message.role,
++                    crate::MessageRole::Assistant | crate::MessageRole::Reply
++                ) {
+                     self.trailing_assistant.push(message);
+                 } else {
+                     self.flush_trailing_assistant(&mut events);
+@@ -200,6 +212,14 @@ impl SpineCharParser {
+                 });
+                 events.push(RolloutEvent::Synthetic { boundary, item });
+             }
++            SpineChar::Arrival { boundary, arrival } => {
++                self.flush_trailing_assistant(&mut events);
++                self.push_cell(SpineChar::Arrival {
++                    boundary,
++                    arrival: arrival.clone(),
++                });
++                events.push(RolloutEvent::Arrival { boundary, arrival });
++            }
+         }
+ 
+         Ok(CharParseStep {
+diff --git a/codex-rs/spine-core/src/context_plan_tests.rs b/codex-rs/spine-core/src/context_plan_tests.rs
+index b14e835352..9cbd941533 100644
+--- a/codex-rs/spine-core/src/context_plan_tests.rs
++++ b/codex-rs/spine-core/src/context_plan_tests.rs
+@@ -10,7 +10,6 @@ use crate::ProjectionCellId;
+ use crate::RawBoundary;
+ use crate::RawSpan;
+ use crate::SourceCellId;
+-use crate::SpawnOutcome;
+ use crate::SpawnTask;
+ use crate::ThreadNamespace;
+ use crate::context_plan::CONTEXT_PLAN_SCHEMA_V2;
+@@ -78,8 +77,8 @@ fn summary() -> ContextItem {
+     })
+ }
+ 
+-fn spawn_evidence() -> ContextItem {
+-    ContextItem::MemorySlot(MemorySlot::SpawnEvidence {
++fn spawn_birth() -> ContextItem {
++    ContextItem::MemorySlot(MemorySlot::Birth {
+         owner_node: NodeId::root_epoch(3).child(2),
+         source: RawSpan {
+             start: RawBoundary(5),
+@@ -89,9 +88,6 @@ fn spawn_evidence() -> ContextItem {
+             summary: "audit".to_string(),
+             prompt: "inspect".to_string(),
+         },
+-        outcome: SpawnOutcome::Completed,
+-        diagnostic: None,
+-        execution_ref: Some("exec-1".to_string()),
+     })
+ }
+ 
+@@ -142,7 +138,7 @@ fn recipe() -> ContextPlanRecipe {
+             },
+             ContextPlanCell::Projection {
+                 projection_id: projection_id(3),
+-                item: spawn_evidence(),
++                item: spawn_birth(),
+             },
+         ],
+         plan_digest: None,
+@@ -192,7 +188,7 @@ fn context_plan_roundtrips_and_resolves_ordered_source_and_memory_cells() {
+                 },
+                 ResolvedContextCell {
+                     provenance: ContextCellProvenance::Projection(projection_id(3)),
+-                    item: spawn_evidence(),
++                    item: spawn_birth(),
+                     labels: Vec::new(),
+                 },
+             ],
+diff --git a/codex-rs/spine-core/src/context_runtime/projection.rs b/codex-rs/spine-core/src/context_runtime/projection.rs
+index 3bf4162eee..dfc329cb8b 100644
+--- a/codex-rs/spine-core/src/context_runtime/projection.rs
++++ b/codex-rs/spine-core/src/context_runtime/projection.rs
+@@ -135,9 +135,22 @@ where
+         ContextItem::Native {
+             source: NativeItemRef::CompactReplacement { .. },
+         } => return Err(SpineContextRuntimeError::ArchivedSourceInLiveContext),
++        ContextItem::MemorySlot(MemorySlot::Arrival { boundary, .. }) => {
++            let cell = take_source_cell(source, used, |cell| {
++                matches!(
++                    cell.character(),
++                    SpineChar::Arrival { boundary: source, .. } if source == boundary
++                )
++            })
++            .ok_or(SpineContextRuntimeError::MissingCell {
++                boundary: *boundary,
++            })?;
++            target.push(cell.with_labels(Vec::new()));
++        }
+         ContextItem::SyntheticNode { .. }
+-        | ContextItem::MemorySlot(MemorySlot::Summary { .. })
+-        | ContextItem::MemorySlot(MemorySlot::SpawnEvidence { .. }) => {
++        | ContextItem::MemorySlot(
++            MemorySlot::Summary { .. } | MemorySlot::Birth { .. } | MemorySlot::Reply { .. },
++        ) => {
+             if let Some(cell) = take_source_cell(source, used, |cell| {
+                 matches!(
+                     cell.character(),
+diff --git a/codex-rs/spine-core/src/executed_fact.rs b/codex-rs/spine-core/src/executed_fact.rs
+index bd4e6d6213..b00bab5f19 100644
+--- a/codex-rs/spine-core/src/executed_fact.rs
++++ b/codex-rs/spine-core/src/executed_fact.rs
+@@ -2,8 +2,6 @@ use crate::MAX_MEMORY_BYTES;
+ use crate::MAX_SUMMARY_BYTES;
+ use crate::identity::AdmissionOrdinal;
+ use crate::identity::ExecutionId;
+-use crate::model::SpawnReceipt;
+-use crate::model::SpawnResult;
+ use crate::model::SpawnTask;
+ use crate::model::SpawnValidationError;
+ use serde::Deserialize;
+@@ -41,9 +39,10 @@ pub enum SpineOperationFact {
+         closed_memory: String,
+         next_summary: String,
+     },
++    /// Births of spawned children. Their results arrive later as external
++    /// inputs, not as part of this fact.
+     Spawn {
+         tasks: Vec<SpawnTask>,
+-        terminal_results: Vec<SpawnResult>,
+     },
+ }
+ 
+@@ -80,16 +79,9 @@ impl ExecutedSpineFact {
+                 validate_field("closed_memory", closed_memory, MAX_MEMORY_BYTES)?;
+                 validate_field("next_summary", next_summary, MAX_SUMMARY_BYTES)?;
+             }
+-            SpineOperationFact::Spawn {
+-                tasks,
+-                terminal_results,
+-            } => {
+-                SpawnReceipt {
+-                    schema: crate::SPINE_SPAWN_RESULT_SCHEMA.to_string(),
+-                    results: terminal_results.clone(),
+-                }
+-                .validate_for(tasks)
+-                .map_err(ExecutedFactError::InvalidSpawn)?;
++            SpineOperationFact::Spawn { tasks } => {
++                crate::model::validate_spawn_tasks(tasks)
++                    .map_err(ExecutedFactError::InvalidSpawn)?;
+             }
+         }
+ 
+diff --git a/codex-rs/spine-core/src/lib.rs b/codex-rs/spine-core/src/lib.rs
+index e51dd27779..d7c17191b3 100644
+--- a/codex-rs/spine-core/src/lib.rs
++++ b/codex-rs/spine-core/src/lib.rs
+@@ -114,13 +114,12 @@ pub mod host {
+     pub use super::model::NodeStatus;
+     pub use super::model::RawBoundary;
+     pub use super::model::RawSpan;
+-    pub use super::model::SPINE_SPAWN_RESULT_SCHEMA;
++    pub use super::model::SpawnArrival;
+     pub use super::model::SpawnOutcome;
+-    pub use super::model::SpawnReceipt;
+-    pub use super::model::SpawnResult;
+     pub use super::model::SpawnTask;
+     pub use super::model::SpawnValidationError;
+     pub use super::model::SpineProjection;
++    pub use super::model::validate_spawn_tasks;
+     pub use super::observer::SpineObserverEffect;
+     pub use super::observer::SpineObserverEffectHandler;
+     pub use super::observer::SpineObserverEffectKind;
+diff --git a/codex-rs/spine-core/src/model.rs b/codex-rs/spine-core/src/model.rs
+index 1d6b8b1de3..ec15659c75 100644
+--- a/codex-rs/spine-core/src/model.rs
++++ b/codex-rs/spine-core/src/model.rs
+@@ -28,6 +28,11 @@ impl NodeId {
+     pub fn parts(&self) -> &[u32] {
+         &self.0
+     }
++
++    /// Whether this node is `scope` or one of its descendants.
++    pub fn is_within(&self, scope: &NodeId) -> bool {
++        self.0.starts_with(&scope.0)
++    }
+ }
+ 
+ impl fmt::Display for NodeId {
+@@ -51,6 +56,11 @@ pub enum MessageRole {
+     /// not assign a `[U#]` anchor or preserve it as a user-memory slot.
+     ContextualUser,
+     Assistant,
++    /// An assistant message that ended its sampling with `stop` and no tool
++    /// call: the agent's reply to the user. The host supplies only its text
++    /// blocks as content. It renders as assistant and is kept in node memory
++    /// at Close.
++    Reply,
+     Developer,
+     System,
+ }
+@@ -62,8 +72,6 @@ pub struct Message {
+     pub content: String,
+ }
+ 
+-pub const SPINE_SPAWN_RESULT_SCHEMA: &str = "spine.spawn.result.v1";
+-
+ #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+ #[serde(deny_unknown_fields)]
+ pub struct SpawnTask {
+@@ -79,25 +87,22 @@ pub enum SpawnOutcome {
+     Aborted,
+ }
+ 
++/// The final result of one spawned child, admitted into its parent as an
++/// external input. A completed child carries its memory; any other outcome
++/// carries a diagnostic and no memory.
+ #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+ #[serde(deny_unknown_fields)]
+-pub struct SpawnResult {
+-    pub ordinal: u32,
++pub struct SpawnArrival {
++    pub producer: NodeId,
+     pub outcome: SpawnOutcome,
+-    pub memory_body: String,
++    #[serde(default)]
++    pub memory: Option<String>,
+     #[serde(default)]
+     pub diagnostic: Option<String>,
+     #[serde(default)]
+     pub execution_ref: Option<String>,
+ }
+ 
+-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+-#[serde(deny_unknown_fields)]
+-pub struct SpawnReceipt {
+-    pub schema: String,
+-    pub results: Vec<SpawnResult>,
+-}
+-
+ #[derive(Clone, Debug, PartialEq, Eq)]
+ pub enum SpawnValidationError {
+     TooFewTasks,
+@@ -106,12 +111,10 @@ pub enum SpawnValidationError {
+         actual: usize,
+     },
+     AggregateTooLarge {
+-        phase: &'static str,
+         max_bytes: usize,
+         actual_bytes: usize,
+     },
+     FieldTooLarge {
+-        ordinal: usize,
+         field: &'static str,
+         max_bytes: usize,
+     },
+@@ -121,29 +124,11 @@ pub enum SpawnValidationError {
+     EmptyTaskPrompt {
+         ordinal: usize,
+     },
+-    InvalidSchema {
+-        schema: String,
+-    },
+-    ResultCount {
+-        expected: usize,
+-        actual: usize,
+-    },
+-    ResultOrdinal {
+-        expected: u32,
+-        actual: u32,
+-    },
+-    EmptyMemory {
+-        ordinal: u32,
+-    },
+-    MissingDiagnostic {
+-        ordinal: u32,
+-    },
+-    EmptyDiagnostic {
+-        ordinal: u32,
+-    },
+-    EmptyExecutionRef {
+-        ordinal: u32,
++    ArrivalMemory {
++        outcome: SpawnOutcome,
+     },
++    ArrivalDiagnostic,
++    EmptyField(&'static str),
+ }
+ 
+ impl std::fmt::Display for SpawnValidationError {
+@@ -154,207 +139,122 @@ impl std::fmt::Display for SpawnValidationError {
+                 write!(f, "spine.spawn has {actual} tasks; maximum is {max}")
+             }
+             Self::AggregateTooLarge {
+-                phase,
+                 max_bytes,
+                 actual_bytes,
+             } => write!(
+                 f,
+-                "spine.spawn {phase} payload is {actual_bytes} bytes; maximum is {max_bytes}"
+-            ),
+-            Self::FieldTooLarge {
+-                ordinal,
+-                field,
+-                max_bytes,
+-            } => write!(
+-                f,
+-                "spine.spawn item {ordinal} field {field} exceeds {max_bytes} bytes"
++                "spine.spawn task payload is {actual_bytes} bytes; maximum is {max_bytes}"
+             ),
++            Self::FieldTooLarge { field, max_bytes } => {
++                write!(f, "spine.spawn field {field} exceeds {max_bytes} bytes")
++            }
+             Self::EmptyTaskSummary { ordinal } => {
+                 write!(f, "spine.spawn task {ordinal} requires a non-empty summary")
+             }
+             Self::EmptyTaskPrompt { ordinal } => {
+                 write!(f, "spine.spawn task {ordinal} requires a non-empty prompt")
+             }
+-            Self::InvalidSchema { schema } => {
+-                write!(f, "unsupported spine.spawn receipt schema `{schema}`")
+-            }
+-            Self::ResultCount { expected, actual } => write!(
+-                f,
+-                "spine.spawn receipt has {actual} results; expected {expected}"
+-            ),
+-            Self::ResultOrdinal { expected, actual } => write!(
+-                f,
+-                "spine.spawn receipt result ordinal {actual}; expected {expected}"
+-            ),
+-            Self::EmptyMemory { ordinal } => {
+-                write!(f, "spine.spawn result {ordinal} requires non-empty memory")
+-            }
+-            Self::MissingDiagnostic { ordinal } => write!(
+-                f,
+-                "spine.spawn non-completed result {ordinal} requires a diagnostic"
+-            ),
+-            Self::EmptyDiagnostic { ordinal } => {
+-                write!(f, "spine.spawn result {ordinal} has an empty diagnostic")
+-            }
+-            Self::EmptyExecutionRef { ordinal } => {
+-                write!(f, "spine.spawn result {ordinal} has an empty execution_ref")
++            Self::ArrivalMemory { outcome } => match outcome {
++                SpawnOutcome::Completed => {
++                    f.write_str("a completed spawn arrival requires non-empty memory")
++                }
++                SpawnOutcome::Errored | SpawnOutcome::Aborted => {
++                    f.write_str("a non-completed spawn arrival must not carry memory")
++                }
++            },
++            Self::ArrivalDiagnostic => {
++                f.write_str("a non-completed spawn arrival requires a diagnostic")
+             }
++            Self::EmptyField(field) => write!(f, "spine.spawn field {field} is empty"),
+         }
+     }
+ }
+ 
+ impl std::error::Error for SpawnValidationError {}
+ 
+-impl SpawnReceipt {
+-    pub fn encode_json(&self) -> Result<String, serde_json::Error> {
+-        serde_json::to_string(self)
++pub fn validate_spawn_tasks(tasks: &[SpawnTask]) -> Result<(), SpawnValidationError> {
++    if tasks.len() < 2 {
++        return Err(SpawnValidationError::TooFewTasks);
+     }
+-
+-    pub fn decode_json(body: &str) -> Result<Self, serde_json::Error> {
+-        serde_json::from_str(body)
++    if tasks.len() > crate::MAX_SPAWN_TASKS {
++        return Err(SpawnValidationError::TooManyTasks {
++            max: crate::MAX_SPAWN_TASKS,
++            actual: tasks.len(),
++        });
+     }
+-
+-    pub fn validate_for(&self, tasks: &[SpawnTask]) -> Result<(), SpawnValidationError> {
+-        if tasks.len() < 2 {
+-            return Err(SpawnValidationError::TooFewTasks);
++    for (ordinal, task) in tasks.iter().enumerate() {
++        if task.summary.trim().is_empty() {
++            return Err(SpawnValidationError::EmptyTaskSummary { ordinal });
+         }
+-        if tasks.len() > crate::MAX_SPAWN_TASKS {
+-            return Err(SpawnValidationError::TooManyTasks {
+-                max: crate::MAX_SPAWN_TASKS,
+-                actual: tasks.len(),
+-            });
++        if task.prompt.trim().is_empty() {
++            return Err(SpawnValidationError::EmptyTaskPrompt { ordinal });
+         }
+-        for (ordinal, task) in tasks.iter().enumerate() {
+-            if task.summary.trim().is_empty() {
+-                return Err(SpawnValidationError::EmptyTaskSummary { ordinal });
++        validate_spawn_field("summary", &task.summary, crate::MAX_SUMMARY_BYTES)?;
++        validate_spawn_field("prompt", &task.prompt, crate::MAX_SPAWN_PROMPT_BYTES)?;
++    }
++    let actual_bytes = tasks.iter().fold(0usize, |total, task| {
++        total
++            .saturating_add(task.summary.len())
++            .saturating_add(task.prompt.len())
++    });
++    if actual_bytes > crate::MAX_SPAWN_BATCH_BYTES {
++        return Err(SpawnValidationError::AggregateTooLarge {
++            max_bytes: crate::MAX_SPAWN_BATCH_BYTES,
++            actual_bytes,
++        });
++    }
++    Ok(())
++}
++
++impl SpawnArrival {
++    pub fn validate(&self) -> Result<(), SpawnValidationError> {
++        match (&self.outcome, self.memory.as_deref()) {
++            (SpawnOutcome::Completed, Some(memory)) if !memory.trim().is_empty() => {
++                validate_spawn_field("memory", memory, crate::MAX_MEMORY_BYTES)?;
+             }
+-            if task.prompt.trim().is_empty() {
+-                return Err(SpawnValidationError::EmptyTaskPrompt { ordinal });
++            (SpawnOutcome::Errored | SpawnOutcome::Aborted, None) => {}
++            (outcome, _) => {
++                return Err(SpawnValidationError::ArrivalMemory { outcome: *outcome });
+             }
+-            validate_spawn_field(ordinal, "summary", &task.summary, crate::MAX_SUMMARY_BYTES)?;
+-            validate_spawn_field(
+-                ordinal,
+-                "prompt",
+-                &task.prompt,
+-                crate::MAX_SPAWN_PROMPT_BYTES,
+-            )?;
+         }
+-        validate_spawn_aggregate(
+-            "task",
+-            tasks.iter().flat_map(|task| [&task.summary, &task.prompt]),
+-        )?;
+-        if self.schema != SPINE_SPAWN_RESULT_SCHEMA {
+-            return Err(SpawnValidationError::InvalidSchema {
+-                schema: self.schema.clone(),
+-            });
+-        }
+-        if self.results.len() != tasks.len() {
+-            return Err(SpawnValidationError::ResultCount {
+-                expected: tasks.len(),
+-                actual: self.results.len(),
+-            });
+-        }
+-        for (expected, result) in self.results.iter().enumerate() {
+-            let expected = u32::try_from(expected).unwrap_or(u32::MAX);
+-            if result.ordinal != expected {
+-                return Err(SpawnValidationError::ResultOrdinal {
+-                    expected,
+-                    actual: result.ordinal,
+-                });
++        match self.diagnostic.as_deref() {
++            None if self.outcome != SpawnOutcome::Completed => {
++                return Err(SpawnValidationError::ArrivalDiagnostic);
+             }
+-            if result.memory_body.trim().is_empty() {
+-                return Err(SpawnValidationError::EmptyMemory {
+-                    ordinal: result.ordinal,
+-                });
++            Some(diagnostic) if diagnostic.trim().is_empty() => {
++                return Err(SpawnValidationError::EmptyField("diagnostic"));
+             }
+-            validate_spawn_field(
+-                usize::try_from(expected).unwrap_or(usize::MAX),
+-                "memory_body",
+-                &result.memory_body,
+-                crate::MAX_MEMORY_BYTES,
+-            )?;
+-            match result.diagnostic.as_deref() {
+-                None if result.outcome != SpawnOutcome::Completed => {
+-                    return Err(SpawnValidationError::MissingDiagnostic {
+-                        ordinal: result.ordinal,
+-                    });
+-                }
+-                Some(diagnostic) if diagnostic.trim().is_empty() => {
+-                    return Err(SpawnValidationError::EmptyDiagnostic {
+-                        ordinal: result.ordinal,
+-                    });
+-                }
+-                Some(diagnostic) => validate_spawn_field(
+-                    usize::try_from(expected).unwrap_or(usize::MAX),
+-                    "diagnostic",
+-                    diagnostic,
+-                    crate::MAX_SUMMARY_BYTES,
+-                )?,
+-                None => {}
++            Some(diagnostic) => {
++                validate_spawn_field("diagnostic", diagnostic, crate::MAX_SUMMARY_BYTES)?;
+             }
+-            if result
+-                .execution_ref
+-                .as_deref()
+-                .is_some_and(|execution_ref| execution_ref.trim().is_empty())
+-            {
+-                return Err(SpawnValidationError::EmptyExecutionRef {
+-                    ordinal: result.ordinal,
+-                });
++            None => {}
++        }
++        match self.execution_ref.as_deref() {
++            Some(execution_ref) if execution_ref.trim().is_empty() => {
++                Err(SpawnValidationError::EmptyField("execution_ref"))
+             }
+-            if let Some(execution_ref) = result.execution_ref.as_deref() {
+-                validate_spawn_field(
+-                    usize::try_from(expected).unwrap_or(usize::MAX),
+-                    "execution_ref",
+-                    execution_ref,
+-                    crate::MAX_SUMMARY_BYTES,
+-                )?;
++            Some(execution_ref) => {
++                validate_spawn_field("execution_ref", execution_ref, crate::MAX_SUMMARY_BYTES)
+             }
++            None => Ok(()),
+         }
+-        validate_spawn_aggregate(
+-            "result",
+-            self.results.iter().flat_map(|result| {
+-                [
+-                    Some(&result.memory_body),
+-                    result.diagnostic.as_ref(),
+-                    result.execution_ref.as_ref(),
+-                ]
+-                .into_iter()
+-                .flatten()
+-            }),
+-        )?;
+-        Ok(())
+     }
+-}
+ 
+-fn validate_spawn_aggregate<'a>(
+-    phase: &'static str,
+-    fields: impl IntoIterator<Item = &'a String>,
+-) -> Result<(), SpawnValidationError> {
+-    let actual_bytes = fields
+-        .into_iter()
+-        .fold(0usize, |total, value| total.saturating_add(value.len()));
+-    if actual_bytes > crate::MAX_SPAWN_BATCH_BYTES {
+-        return Err(SpawnValidationError::AggregateTooLarge {
+-            phase,
+-            max_bytes: crate::MAX_SPAWN_BATCH_BYTES,
+-            actual_bytes,
+-        });
++    pub(crate) fn retained_bytes(&self) -> usize {
++        [&self.memory, &self.diagnostic, &self.execution_ref]
++            .into_iter()
++            .flatten()
++            .fold(0usize, |total, value| total.saturating_add(value.len()))
+     }
+-    Ok(())
+ }
+ 
+ fn validate_spawn_field(
+-    ordinal: usize,
+     field: &'static str,
+     value: &str,
+     max_bytes: usize,
+ ) -> Result<(), SpawnValidationError> {
+     if value.len() > max_bytes {
+-        return Err(SpawnValidationError::FieldTooLarge {
+-            ordinal,
+-            field,
+-            max_bytes,
+-        });
++        return Err(SpawnValidationError::FieldTooLarge { field, max_bytes });
+     }
+     Ok(())
+ }
+@@ -373,6 +273,10 @@ pub(crate) enum RolloutEvent {
+         boundary: RawBoundary,
+         item: ContextItem,
+     },
++    Arrival {
++        boundary: RawBoundary,
++        arrival: SpawnArrival,
++    },
+     Compact {
+         boundary: RawBoundary,
+         replacement_history: Vec<ContextItem>,
+@@ -386,6 +290,7 @@ impl RolloutEvent {
+             Self::SourceSpan { span, .. } => span.end,
+             Self::Opaque { boundary }
+             | Self::Synthetic { boundary, .. }
++            | Self::Arrival { boundary, .. }
+             | Self::Compact { boundary, .. } => *boundary,
+         }
+     }
+@@ -396,6 +301,7 @@ impl RolloutEvent {
+             Self::SourceSpan { retained_bytes, .. } => *retained_bytes,
+             Self::Opaque { .. } => 0,
+             Self::Synthetic { item, .. } => item.retained_synthetic_bytes(),
++            Self::Arrival { arrival, .. } => arrival.retained_bytes(),
+             Self::Compact {
+                 replacement_history,
+                 ..
+@@ -411,6 +317,9 @@ impl RolloutEvent {
+ pub enum NodeKind {
+     RootEpoch,
+     Task,
++    /// The immutable birth record of a spawned child. Whether the child has
++    /// finished is derived from its arrival, not stored on the node.
++    Spawn,
+ }
+ 
+ #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+@@ -433,13 +342,22 @@ pub enum MemorySlot {
+         source: RawSpan,
+         body: String,
+     },
+-    SpawnEvidence {
++    /// A spawned child's birth record: the task it was given.
++    Birth {
+         owner_node: NodeId,
+         source: RawSpan,
+         task: SpawnTask,
+-        outcome: SpawnOutcome,
+-        diagnostic: Option<String>,
+-        execution_ref: Option<String>,
++    },
++    /// A spawned child's final result, kept where it was admitted.
++    Arrival {
++        owner_node: NodeId,
++        boundary: RawBoundary,
++        arrival: SpawnArrival,
++    },
++    /// The agent's reply to the user, kept from a closed node.
++    Reply {
++        owner_node: NodeId,
++        message: Message,
+     },
+ }
+ 
+@@ -482,20 +400,13 @@ impl ContextItem {
+             }
+             Self::SyntheticNode { summary, .. } => summary.len(),
+             Self::MemorySlot(MemorySlot::Summary { body, .. }) => body.len(),
+-            Self::MemorySlot(MemorySlot::SpawnEvidence {
+-                task,
+-                diagnostic,
+-                execution_ref,
+-                ..
+-            }) => task
+-                .summary
+-                .len()
+-                .saturating_add(task.prompt.len())
+-                .saturating_add(diagnostic.as_ref().map_or(0, String::len))
+-                .saturating_add(execution_ref.as_ref().map_or(0, String::len)),
++            Self::MemorySlot(MemorySlot::Birth { task, .. }) => {
++                task.summary.len().saturating_add(task.prompt.len())
++            }
++            Self::MemorySlot(MemorySlot::Reply { message, .. }) => message.content.len(),
+             Self::Message { .. }
+             | Self::SourceSpan { .. }
+-            | Self::MemorySlot(MemorySlot::User { .. })
++            | Self::MemorySlot(MemorySlot::User { .. } | MemorySlot::Arrival { .. })
+             | Self::Native { .. } => 0,
+         }
+     }
+@@ -510,6 +421,9 @@ pub struct NodeSnapshot {
+     pub status: NodeStatus,
+     pub summary: Option<String>,
+     pub memory: Option<Vec<MemorySlot>>,
++    /// For a `Spawn` node, the outcome of its admitted arrival; `None` while
++    /// the child has not arrived.
++    pub spawn_outcome: Option<SpawnOutcome>,
+     pub start: RawBoundary,
+     pub end: Option<RawBoundary>,
+ }
+diff --git a/codex-rs/spine-core/src/planner/context_builder.rs b/codex-rs/spine-core/src/planner/context_builder.rs
+index 54ce4fd1e1..964d8da946 100644
+--- a/codex-rs/spine-core/src/planner/context_builder.rs
++++ b/codex-rs/spine-core/src/planner/context_builder.rs
+@@ -129,9 +129,17 @@ impl ContextPlanBuilder<'_> {
+             } => {
+                 self.push_projection(item.clone());
+             }
++            ContextItem::MemorySlot(MemorySlot::Arrival { boundary, .. }) => {
++                let cell = self
++                    .source_at_boundary(*boundary)
++                    .filter(|cell| matches!(&cell.payload, SourceCellPayload::Arrival(_)))
++                    .ok_or(PlannerError::MissingSourceBoundary(*boundary))?;
++                self.push_source(&cell, Vec::new());
++            }
+             ContextItem::SyntheticNode { .. }
+-            | ContextItem::MemorySlot(MemorySlot::Summary { .. })
+-            | ContextItem::MemorySlot(MemorySlot::SpawnEvidence { .. }) => {
++            | ContextItem::MemorySlot(
++                MemorySlot::Summary { .. } | MemorySlot::Birth { .. } | MemorySlot::Reply { .. },
++            ) => {
+                 self.push_projection(item.clone());
+             }
+         }
+diff --git a/codex-rs/spine-core/src/planner/error.rs b/codex-rs/spine-core/src/planner/error.rs
+index ad81ac122f..b9feedbcb1 100644
+--- a/codex-rs/spine-core/src/planner/error.rs
++++ b/codex-rs/spine-core/src/planner/error.rs
+@@ -141,6 +141,10 @@ impl std::error::Error for PlannerError {}
+ pub enum PlannerTransitionError {
+     MultipleStructuralFacts,
+     TaskCursorRequired(&'static str),
++    /// Close and Next require every birth under the cursor to have arrived.
++    UnarrivedSpawns(Vec<crate::NodeId>),
++    /// A reply ends its sampling without a tool call, so it cannot carry a transition.
++    ReplyWithTransition,
+ }
+ 
+ impl fmt::Display for PlannerTransitionError {
+@@ -152,6 +156,14 @@ impl fmt::Display for PlannerTransitionError {
+             Self::TaskCursorRequired(operation) => {
+                 write!(formatter, "{operation} requires an active task cursor")
+             }
++            Self::UnarrivedSpawns(nodes) => write!(
++                formatter,
++                "spawned children have not arrived: {}",
++                crate::reducer::display_nodes(nodes)
++            ),
++            Self::ReplyWithTransition => {
++                formatter.write_str("a reply sampling cannot carry a Spine transition")
++            }
+         }
+     }
+ }
+diff --git a/codex-rs/spine-core/src/planner/helpers.rs b/codex-rs/spine-core/src/planner/helpers.rs
+index 12edcfa228..0f13461abc 100644
+--- a/codex-rs/spine-core/src/planner/helpers.rs
++++ b/codex-rs/spine-core/src/planner/helpers.rs
+@@ -13,6 +13,12 @@ pub(super) fn map_compile_error(error: SamplingCompileError) -> PlannerError {
+             TypedTransitionError::TaskCursorRequired(operation) => {
+                 PlannerTransitionError::TaskCursorRequired(operation)
+             }
++            TypedTransitionError::UnarrivedSpawns(nodes) => {
++                PlannerTransitionError::UnarrivedSpawns(nodes)
++            }
++            TypedTransitionError::ReplyWithTransition => {
++                PlannerTransitionError::ReplyWithTransition
++            }
+         }),
+     }
+ }
+diff --git a/codex-rs/spine-core/src/reducer.rs b/codex-rs/spine-core/src/reducer.rs
+index b4b2e8df6d..ad7d307978 100644
+--- a/codex-rs/spine-core/src/reducer.rs
++++ b/codex-rs/spine-core/src/reducer.rs
+@@ -12,20 +12,28 @@ use crate::NodeStatus;
+ use crate::RawBoundary;
+ use crate::RawSpan;
+ use crate::RolloutEvent;
+-use crate::SpawnResult;
++use crate::SpawnArrival;
++use crate::SpawnOutcome;
+ use crate::SpawnTask;
++use crate::SpineError;
+ use crate::SpineOperationFact;
+ use crate::SpineProjection;
++use std::collections::BTreeMap;
++
+ #[derive(Clone, Debug, PartialEq, Eq)]
+ enum NodeEntry {
+     Leaf(ContextItem),
+     Child(NodeId),
++    /// The agent's reply inside a sampling span. The span renders it while the
++    /// node is open; the node's memory keeps it after Close.
++    Reply(Message),
+ }
+ 
+ #[derive(Clone, Debug, PartialEq, Eq)]
+ struct RuntimeNode {
+     id: NodeId,
+     parent: Option<NodeId>,
++    kind: NodeKind,
+     status: NodeStatus,
+     summary: Option<String>,
+     memory: Option<Vec<MemorySlot>>,
+@@ -39,23 +47,20 @@ impl RuntimeNode {
+     fn children(&self) -> impl Iterator<Item = &NodeId> {
+         self.entries.iter().filter_map(|entry| match entry {
+             NodeEntry::Child(child) => Some(child),
+-            NodeEntry::Leaf(_) => None,
++            NodeEntry::Leaf(_) | NodeEntry::Reply(_) => None,
+         })
+     }
+ 
+-    fn snapshot(&self) -> NodeSnapshot {
++    fn snapshot(&self, arrivals: &BTreeMap<NodeId, SpawnOutcome>) -> NodeSnapshot {
+         NodeSnapshot {
+             id: self.id.clone(),
+             parent: self.parent.clone(),
+             children: self.children().cloned().collect(),
+-            kind: if self.parent.is_none() {
+-                NodeKind::RootEpoch
+-            } else {
+-                NodeKind::Task
+-            },
++            kind: self.kind,
+             status: self.status,
+             summary: self.summary.clone(),
+             memory: self.memory.clone(),
++            spawn_outcome: arrivals.get(&self.id).copied(),
+             start: self.start,
+             end: self.end,
+         }
+@@ -69,6 +74,8 @@ pub(crate) struct SpineReducer {
+     cursor: NodeId,
+     baseline: Vec<ContextItem>,
+     next_user_anchor: u64,
++    /// Outcome of every admitted arrival, by producer.
++    arrivals: BTreeMap<NodeId, SpawnOutcome>,
+     last_boundary: Option<RawBoundary>,
+ }
+ 
+@@ -85,6 +92,7 @@ impl SpineReducer {
+             nodes: vec![RuntimeNode {
+                 id: root_id.clone(),
+                 parent: None,
++                kind: NodeKind::RootEpoch,
+                 status: NodeStatus::Live,
+                 summary: Some("root".to_string()),
+                 memory: None,
+@@ -97,11 +105,12 @@ impl SpineReducer {
+             cursor: root_id,
+             baseline: Vec::new(),
+             next_user_anchor: 1,
++            arrivals: BTreeMap::new(),
+             last_boundary: None,
+         }
+     }
+ 
+-    pub(crate) fn apply(&mut self, event: RolloutEvent) -> SpineProjection {
++    pub(crate) fn apply(&mut self, event: RolloutEvent) -> Result<SpineProjection, SpineError> {
+         self.last_boundary = Some(event.boundary());
+         match event {
+             RolloutEvent::Message(message) => self.apply_message(message),
+@@ -114,22 +123,33 @@ impl SpineReducer {
+             RolloutEvent::Synthetic { item, .. } => {
+                 self.push_cursor_entry(NodeEntry::Leaf(item));
+             }
++            RolloutEvent::Arrival { boundary, arrival } => self.admit_arrival(boundary, arrival)?,
+             RolloutEvent::Compact {
+                 boundary,
+                 replacement_history,
+-            } => self.apply_compact(boundary, replacement_history),
++            } => {
++                let unarrived = self.unarrived_spawns(&self.current_root);
++                if !unarrived.is_empty() {
++                    return Err(SpineError::UnarrivedSpawns(unarrived));
++                }
++                self.apply_compact(boundary, replacement_history);
++            }
+         }
+-        self.projection()
++        Ok(self.projection())
+     }
+ 
+     pub(crate) fn apply_sampling(
+         &mut self,
+         span: RawSpan,
+         facts: &[&ExecutedSpineFact],
++        replies: Vec<Message>,
+         open_input_tokens: Option<u64>,
+     ) -> Result<SpineProjection, TypedTransitionError> {
+         self.last_boundary = Some(span.end);
+         let structural = facts.to_vec();
++        if !structural.is_empty() && !replies.is_empty() {
++            return Err(TypedTransitionError::ReplyWithTransition);
++        }
+         let all_spawn = structural
+             .iter()
+             .all(|fact| matches!(fact.operation, SpineOperationFact::Spawn { .. }));
+@@ -141,10 +161,7 @@ impl SpineReducer {
+             let batches = structural
+                 .iter()
+                 .filter_map(|fact| match &fact.operation {
+-                    SpineOperationFact::Spawn {
+-                        tasks,
+-                        terminal_results,
+-                    } => Some((tasks.clone(), terminal_results.clone())),
++                    SpineOperationFact::Spawn { tasks } => Some(tasks.clone()),
+                     SpineOperationFact::Open { .. }
+                     | SpineOperationFact::Close { .. }
+                     | SpineOperationFact::Next { .. } => None,
+@@ -157,18 +174,14 @@ impl SpineReducer {
+                     self.open(span, summary.clone(), open_input_tokens);
+                 }
+                 Some(SpineOperationFact::Close { memory }) => {
+-                    if self.cursor_kind() != NodeKind::Task {
+-                        return Err(TypedTransitionError::TaskCursorRequired("close"));
+-                    }
++                    self.require_closable("close")?;
+                     self.close(span, memory.clone());
+                 }
+                 Some(SpineOperationFact::Next {
+                     closed_memory,
+                     next_summary,
+                 }) => {
+-                    if self.cursor_kind() != NodeKind::Task {
+-                        return Err(TypedTransitionError::TaskCursorRequired("next"));
+-                    }
++                    self.require_closable("next")?;
+                     self.next(
+                         span,
+                         next_summary.clone(),
+@@ -176,14 +189,14 @@ impl SpineReducer {
+                         open_input_tokens,
+                     );
+                 }
+-                Some(SpineOperationFact::Spawn {
+-                    tasks,
+-                    terminal_results,
+-                }) => {
+-                    self.spawn(span, vec![(tasks.clone(), terminal_results.clone())]);
++                Some(SpineOperationFact::Spawn { tasks }) => {
++                    self.spawn(span, vec![tasks.clone()]);
+                 }
+                 None => {
+                     self.push_source_span(span);
++                    for reply in replies {
++                        self.push_cursor_entry(NodeEntry::Reply(reply));
++                    }
+                 }
+             }
+         }
+@@ -193,7 +206,11 @@ impl SpineReducer {
+ 
+     pub(crate) fn projection(&self) -> SpineProjection {
+         SpineProjection {
+-            nodes: self.nodes.iter().map(RuntimeNode::snapshot).collect(),
++            nodes: self
++                .nodes
++                .iter()
++                .map(|node| node.snapshot(&self.arrivals))
++                .collect(),
+             cursor: self.cursor.clone(),
+             visible_context: self.render_current_epoch(),
+             last_boundary: self.last_boundary,
+@@ -234,6 +251,62 @@ impl SpineReducer {
+         }));
+     }
+ 
++    /// Admits a spawned child's final result at the cursor. The producer must
++    /// be a birth of the current epoch that has not arrived yet.
++    fn admit_arrival(
++        &mut self,
++        boundary: RawBoundary,
++        arrival: SpawnArrival,
++    ) -> Result<(), SpineError> {
++        arrival.validate().map_err(SpineError::InvalidArrival)?;
++        let born = self.nodes.iter().any(|node| {
++            node.kind == NodeKind::Spawn
++                && node.id == arrival.producer
++                && node.id.is_within(&self.current_root)
++        });
++        if !born {
++            return Err(SpineError::UnknownSpawnProducer(arrival.producer));
++        }
++        if self.arrivals.contains_key(&arrival.producer) {
++            return Err(SpineError::DuplicateArrival(arrival.producer));
++        }
++        self.arrivals
++            .insert(arrival.producer.clone(), arrival.outcome);
++        let owner_node = self.cursor.clone();
++        self.push_cursor_entry(NodeEntry::Leaf(ContextItem::MemorySlot(
++            MemorySlot::Arrival {
++                owner_node,
++                boundary,
++                arrival,
++            },
++        )));
++        Ok(())
++    }
++
++    /// Births inside `scope` whose results have not arrived.
++    fn unarrived_spawns(&self, scope: &NodeId) -> Vec<NodeId> {
++        self.nodes
++            .iter()
++            .filter(|node| {
++                node.kind == NodeKind::Spawn
++                    && node.id.is_within(scope)
++                    && !self.arrivals.contains_key(&node.id)
++            })
++            .map(|node| node.id.clone())
++            .collect()
++    }
++
++    fn require_closable(&self, operation: &'static str) -> Result<(), TypedTransitionError> {
++        if self.nodes[self.node_index(&self.cursor)].kind != NodeKind::Task {
++            return Err(TypedTransitionError::TaskCursorRequired(operation));
++        }
++        let unarrived = self.unarrived_spawns(&self.cursor);
++        if !unarrived.is_empty() {
++            return Err(TypedTransitionError::UnarrivedSpawns(unarrived));
++        }
++        Ok(())
++    }
++
+     fn push_source_span(&mut self, span: RawSpan) {
+         self.push_cursor_entry(NodeEntry::Leaf(ContextItem::SourceSpan { span }));
+     }
+@@ -250,6 +323,7 @@ impl SpineReducer {
+         self.nodes.push(RuntimeNode {
+             id: child_id.clone(),
+             parent: Some(parent_id),
++            kind: NodeKind::Task,
+             status: NodeStatus::Live,
+             summary: Some(summary),
+             memory: None,
+@@ -308,6 +382,7 @@ impl SpineReducer {
+         self.nodes.push(RuntimeNode {
+             id: sibling_id.clone(),
+             parent: Some(parent_id),
++            kind: NodeKind::Task,
+             status: NodeStatus::Live,
+             summary: Some(summary),
+             memory: None,
+@@ -319,42 +394,27 @@ impl SpineReducer {
+         self.cursor = sibling_id;
+     }
+ 
+-    fn spawn(&mut self, span: RawSpan, batches: Vec<(Vec<SpawnTask>, Vec<SpawnResult>)>) {
++    fn spawn(&mut self, span: RawSpan, batches: Vec<Vec<SpawnTask>>) {
+         let parent_id = self.cursor.clone();
+         let parent_index = self.node_index(&parent_id);
+         let first_child_ordinal = self.nodes[parent_index].children().count() as u32 + 1;
+-        let total = batches.iter().map(|(tasks, _)| tasks.len()).sum();
+-        let mut child_ids = Vec::with_capacity(total);
+-        let mut children = Vec::with_capacity(total);
+-        for (offset, (task, result)) in batches
+-            .into_iter()
+-            .flat_map(|(tasks, results)| tasks.into_iter().zip(results))
+-            .enumerate()
+-        {
++        let mut child_ids = Vec::new();
++        let mut children = Vec::new();
++        for (offset, task) in batches.into_iter().flatten().enumerate() {
+             let offset = u32::try_from(offset).unwrap_or(u32::MAX);
+             let child_id = parent_id.child(first_child_ordinal.saturating_add(offset));
+-            let memory = vec![
+-                MemorySlot::SpawnEvidence {
+-                    owner_node: child_id.clone(),
+-                    source: span,
+-                    task: task.clone(),
+-                    outcome: result.outcome,
+-                    diagnostic: result.diagnostic,
+-                    execution_ref: result.execution_ref,
+-                },
+-                MemorySlot::Summary {
+-                    owner_node: child_id.clone(),
+-                    source: span,
+-                    body: result.memory_body,
+-                },
+-            ];
+             child_ids.push(child_id.clone());
+             children.push(RuntimeNode {
+-                id: child_id,
++                id: child_id.clone(),
+                 parent: Some(parent_id.clone()),
++                kind: NodeKind::Spawn,
+                 status: NodeStatus::Closed,
+-                summary: Some(task.summary),
+-                memory: Some(memory),
++                summary: Some(task.summary.clone()),
++                memory: Some(vec![MemorySlot::Birth {
++                    owner_node: child_id,
++                    source: span,
++                    task,
++                }]),
+                 start: span.start,
+                 end: Some(span.end),
+                 open_input_tokens: None,
+@@ -386,6 +446,7 @@ impl SpineReducer {
+         self.nodes.push(RuntimeNode {
+             id: next_id.clone(),
+             parent: None,
++            kind: NodeKind::RootEpoch,
+             status: NodeStatus::Live,
+             summary: Some("root".to_string()),
+             memory: None,
+@@ -417,13 +478,20 @@ impl SpineReducer {
+                     message: message.clone(),
+                     anchor: *anchor,
+                 }),
++                NodeEntry::Leaf(ContextItem::MemorySlot(slot @ MemorySlot::Arrival { .. })) => {
++                    slots.push(slot.clone());
++                }
++                NodeEntry::Reply(message) => slots.push(MemorySlot::Reply {
++                    owner_node: owner_node.clone(),
++                    message: message.clone(),
++                }),
+                 NodeEntry::Child(child_id) => {
+                     let child = &self.nodes[self.node_index(child_id)];
+                     if let Some(memory) = &child.memory {
+                         slots.extend(memory.iter().cloned());
+                     }
+                 }
+-                _ => {}
++                NodeEntry::Leaf(_) => {}
+             }
+         }
+         slots.push(MemorySlot::Summary {
+@@ -468,6 +536,7 @@ impl SpineReducer {
+             match entry {
+                 NodeEntry::Leaf(item) => context.push(item.clone()),
+                 NodeEntry::Child(node_id) => self.render_node(node_id, context),
++                NodeEntry::Reply(_) => {}
+             }
+         }
+     }
+@@ -477,14 +546,6 @@ impl SpineReducer {
+         self.nodes[index].entries.push(entry);
+     }
+ 
+-    fn cursor_kind(&self) -> NodeKind {
+-        if self.nodes[self.node_index(&self.cursor)].parent.is_none() {
+-            NodeKind::RootEpoch
+-        } else {
+-            NodeKind::Task
+-        }
+-    }
+-
+     fn node_index(&self, id: &NodeId) -> usize {
+         self.nodes
+             .iter()
+@@ -493,8 +554,18 @@ impl SpineReducer {
+     }
+ }
+ 
++pub(crate) fn display_nodes(nodes: &[NodeId]) -> String {
++    nodes
++        .iter()
++        .map(NodeId::to_string)
++        .collect::<Vec<_>>()
++        .join(", ")
++}
++
+ #[derive(Clone, Debug, PartialEq, Eq)]
+ pub(crate) enum TypedTransitionError {
+     MultipleStructuralFacts,
+     TaskCursorRequired(&'static str),
++    UnarrivedSpawns(Vec<NodeId>),
++    ReplyWithTransition,
+ }
+diff --git a/codex-rs/spine-core/src/sampling_delta.rs b/codex-rs/spine-core/src/sampling_delta.rs
+index 30a5f55c0b..893f68bb02 100644
+--- a/codex-rs/spine-core/src/sampling_delta.rs
++++ b/codex-rs/spine-core/src/sampling_delta.rs
+@@ -114,19 +114,33 @@ pub(crate) fn reduce_sampling_delta(
+     }
+ 
+     let sampling_source = &source_tail[sampling_start..];
++    let mut sampled = Vec::new();
+     for cell in sampling_source {
+         let step = parser
+             .eat(cell.character())
+             .map_err(SamplingDeltaError::Parse)?;
+-        for event in step.events() {
+-            retained_bytes = retained_bytes.saturating_add(event.retained_bytes());
+-        }
++        sampled.extend(step.events().iter().cloned());
+     }
+-    for event in parser
+-        .finish_sampling(post_boundary)
+-        .map_err(SamplingDeltaError::Parse)?
+-    {
++    sampled.extend(
++        parser
++            .finish_sampling(post_boundary)
++            .map_err(SamplingDeltaError::Parse)?,
++    );
++    let mut replies = Vec::new();
++    for event in sampled {
+         retained_bytes = retained_bytes.saturating_add(event.retained_bytes());
++        match event {
++            RolloutEvent::Message(message) if message.role == crate::MessageRole::Reply => {
++                replies.push(message);
++            }
++            // Arrivals enter only between samplings; inside a span they would be lost.
++            RolloutEvent::Arrival { boundary, .. } => {
++                return Err(SamplingDeltaError::Compile(SamplingCompileError::Spine(
++                    crate::SpineError::ArrivalInsideSampling(boundary),
++                )));
++            }
++            _ => {}
++        }
+     }
+ 
+     // Native tool items are opaque. Every explicit Spine fact is bound to the
+@@ -163,7 +177,7 @@ pub(crate) fn reduce_sampling_delta(
+         };
+         let fact_refs = facts.iter().collect::<Vec<_>>();
+         compiler
+-            .eat_sampling(span, retained_bytes, &fact_refs, open_input_tokens)
++            .eat_sampling(span, retained_bytes, &fact_refs, replies, open_input_tokens)
+             .map_err(SamplingDeltaError::Compile)?;
+     }
+ 
+diff --git a/codex-rs/spine-core/src/source_ledger.rs b/codex-rs/spine-core/src/source_ledger.rs
+index fdea255fb2..a3b727aa73 100644
+--- a/codex-rs/spine-core/src/source_ledger.rs
++++ b/codex-rs/spine-core/src/source_ledger.rs
+@@ -5,6 +5,7 @@ use crate::Message;
+ use crate::NativeItemRef;
+ use crate::RawBoundary;
+ use crate::SourceCellId;
++use crate::SpawnArrival;
+ use crate::SpineChar;
+ use crate::ThreadNamespace;
+ use crate::context_plan::ContextPlanSource;
+@@ -41,6 +42,7 @@ pub enum SourceCellPayload {
+     Message(Message),
+     Opaque,
+     Synthetic(ContextItem),
++    Arrival(SpawnArrival),
+ }
+ 
+ #[derive(Clone, Debug, Error, PartialEq, Eq)]
+@@ -222,6 +224,10 @@ impl SourceCell {
+                 boundary,
+                 item: item.clone(),
+             },
++            SourceCellPayload::Arrival(arrival) => SpineChar::Arrival {
++                boundary,
++                arrival: arrival.clone(),
++            },
+         }
+     }
+ }
+@@ -254,6 +260,9 @@ fn source_parts(character: SpineChar) -> (SourceCellPayload, ContextItem) {
+         ),
+         SpineChar::Opaque { boundary } => (SourceCellPayload::Opaque, native_item(boundary)),
+         SpineChar::Synthetic { item, .. } => (SourceCellPayload::Synthetic(item.clone()), item),
++        SpineChar::Arrival { boundary, arrival } => {
++            (SourceCellPayload::Arrival(arrival), native_item(boundary))
++        }
+     }
+ }
+ 
+diff --git a/codex-rs/spine-core/src/status.rs b/codex-rs/spine-core/src/status.rs
+index 246d06350a..12dfd5cbec 100644
+--- a/codex-rs/spine-core/src/status.rs
++++ b/codex-rs/spine-core/src/status.rs
+@@ -79,16 +79,7 @@ pub fn tree_snapshot(projection: &SpineProjection, samples: &[TokenUsageSample])
+                     _ => None,
+                 })
+             }),
+-            spawn_outcome: node.memory.as_ref().and_then(|slots| {
+-                slots.iter().find_map(|slot| match slot {
+-                    crate::MemorySlot::SpawnEvidence {
+-                        owner_node,
+-                        outcome,
+-                        ..
+-                    } if owner_node == &node.id => Some(*outcome),
+-                    _ => None,
+-                })
+-            }),
++            spawn_outcome: node.spawn_outcome,
+             start: node.start,
+             end: node.end,
+             pressure: pressures.get(&node.id).cloned(),
+diff --git a/codex-rs/spine-core/tests/recipe_memory_tests.rs b/codex-rs/spine-core/tests/recipe_memory_tests.rs
+index 3fa41c8aff..5c967a430a 100644
+--- a/codex-rs/spine-core/tests/recipe_memory_tests.rs
++++ b/codex-rs/spine-core/tests/recipe_memory_tests.rs
+@@ -7,14 +7,16 @@ use spine_core::host::Feature;
+ use spine_core::host::MemorySlot;
+ use spine_core::host::Message;
+ use spine_core::host::MessageRole;
++use spine_core::host::NodeId;
++use spine_core::host::PlannerError;
+ use spine_core::host::RawBoundary;
+ use spine_core::host::ReplayInput;
+ use spine_core::host::SamplingArchiveRecord;
+ use spine_core::host::SamplingFinish;
+ use spine_core::host::SamplingRuntime;
+ use spine_core::host::SamplingTerminal;
++use spine_core::host::SpawnArrival;
+ use spine_core::host::SpawnOutcome;
+-use spine_core::host::SpawnResult;
+ use spine_core::host::SpawnTask;
+ use spine_core::host::SpineChar;
+ use spine_core::host::SpineCompactBarrierV1;
+@@ -60,39 +62,79 @@ impl History {
+     }
+ 
+     fn step(&mut self, operation: SpineOperationFact) {
++        self.boundary += 1;
++        let output = SpineChar::Opaque {
++            boundary: RawBoundary(self.boundary),
++        };
++        self.sample(Some(operation), output).expect("prepare");
++    }
++
++    /// A sampling without a Spine fact whose only output is one message.
++    fn say(&mut self, role: MessageRole, content: &str) {
++        self.boundary += 1;
++        let output = SpineChar::Message(Message {
++            boundary: RawBoundary(self.boundary),
++            role,
++            content: content.to_string(),
++        });
++        self.sample(None, output).expect("prepare");
++    }
++
++    fn arrival(&mut self, producer: &[u32], outcome: SpawnOutcome, memory: Option<&str>) {
++        self.boundary += 1;
++        let character = SpineChar::Arrival {
++            boundary: RawBoundary(self.boundary),
++            arrival: SpawnArrival {
++                producer: node(producer),
++                outcome,
++                memory: memory.map(str::to_string),
++                diagnostic: (outcome != SpawnOutcome::Completed).then(|| "cancelled".to_string()),
++                execution_ref: Some(node(producer).to_string()),
++            },
++        };
++        self.runtime
++            .observe_source([character.clone()])
++            .expect("source");
++        self.inputs.push(ReplayInput::Source(character));
++    }
++
++    fn sample(
++        &mut self,
++        operation: Option<SpineOperationFact>,
++        output: SpineChar,
++    ) -> Result<(), PlannerError> {
+         let sampling = self.runtime.begin_sampling().expect("begin");
+         let started = self
+             .runtime
+             .sampling_started_record(&sampling)
+             .expect("started");
+         self.inputs.push(ReplayInput::Archive(started));
+-        self.runtime
+-            .register_execution("control")
+-            .expect("register");
+-        self.runtime
+-            .stage_execution(
+-                "control",
+-                ExecutionOrigin::Direct {
+-                    execution_ref: "control".to_string(),
+-                },
+-                operation,
+-            )
+-            .expect("stage");
+-        self.boundary += 1;
+-        let output = SpineChar::Opaque {
+-            boundary: RawBoundary(self.boundary),
+-        };
++        if let Some(operation) = operation.clone() {
++            self.runtime
++                .register_execution("control")
++                .expect("register");
++            self.runtime
++                .stage_execution(
++                    "control",
++                    ExecutionOrigin::Direct {
++                        execution_ref: "control".to_string(),
++                    },
++                    operation,
++                )
++                .expect("stage");
++        }
+         self.runtime
+             .observe_source([output.clone()])
+             .expect("source");
+         self.inputs.push(ReplayInput::Source(output));
+-        self.runtime
+-            .finish_execution("control", true)
+-            .expect("execution");
++        if operation.is_some() {
++            self.runtime
++                .finish_execution("control", true)
++                .expect("execution");
++        }
+         let SamplingFinish::Prepared(prepared) = self
+             .runtime
+-            .finish_sampling(sampling, SamplingTerminal::Completed)
+-            .expect("prepare")
++            .finish_sampling(sampling, SamplingTerminal::Completed)?
+         else {
+             panic!("completed sampling must prepare");
+         };
+@@ -103,6 +145,7 @@ impl History {
+         assert_eq!(record, decoded);
+         self.inputs.push(ReplayInput::Archive(decoded));
+         self.runtime.install_prepared(prepared).expect("install");
++        Ok(())
+     }
+ 
+     fn compact(&mut self) {
+@@ -247,26 +290,9 @@ fn recipe_preserves_nested_user_child_and_spawn_memory_owners() {
+         closed_memory: "same body".to_string(),
+         next_summary: "sibling".to_string(),
+     });
+-    history.step(SpineOperationFact::Spawn {
+-        tasks: ["left", "right"]
+-            .into_iter()
+-            .map(|summary| SpawnTask {
+-                summary: summary.to_string(),
+-                prompt: format!("inspect {summary}"),
+-            })
+-            .collect(),
+-        terminal_results: ["left", "right"]
+-            .into_iter()
+-            .enumerate()
+-            .map(|(ordinal, reference)| SpawnResult {
+-                ordinal: u32::try_from(ordinal).expect("task ordinal"),
+-                outcome: SpawnOutcome::Completed,
+-                memory_body: "same body".to_string(),
+-                diagnostic: None,
+-                execution_ref: Some(reference.to_string()),
+-            })
+-            .collect(),
+-    });
++    history.step(spawn(["left", "right"]));
++    history.arrival(&[1, 2, 1], SpawnOutcome::Completed, Some("same body"));
++    history.arrival(&[1, 2, 2], SpawnOutcome::Completed, Some("same body"));
+     history.step(SpineOperationFact::Close {
+         memory: "same body".to_string(),
+     });
+@@ -289,8 +315,6 @@ fn recipe_preserves_nested_user_child_and_spawn_memory_owners() {
+         vec![
+             ("1.1.1".to_string(), "same body"),
+             ("1.1".to_string(), "same body"),
+-            ("1.2.1".to_string(), "same body"),
+-            ("1.2.2".to_string(), "same body"),
+             ("1.2".to_string(), "same body"),
+         ]
+     );
+@@ -305,17 +329,27 @@ fn recipe_preserves_nested_user_child_and_spawn_memory_owners() {
+         })
+         .collect::<Vec<_>>();
+     assert_eq!(users, vec!["outer user evidence", "inner user evidence"]);
+-    let references = resolved
++    let births = resolved
+         .cells
+         .iter()
+         .filter_map(|cell| match &cell.item {
+-            ContextItem::MemorySlot(MemorySlot::SpawnEvidence { execution_ref, .. }) => {
+-                execution_ref.as_deref()
++            ContextItem::MemorySlot(MemorySlot::Birth { owner_node, .. }) => {
++                Some(owner_node.to_string())
+             }
+             _ => None,
+         })
+         .collect::<Vec<_>>();
+-    assert_eq!(references, vec!["left", "right"]);
++    assert_eq!(births, vec!["1.2.1", "1.2.2"]);
++    assert_eq!(
++        memory_shape(&history, &[1, 2]),
++        vec![
++            "birth 1.2.1",
++            "birth 1.2.2",
++            "arrival 1.2.1",
++            "arrival 1.2.2",
++            "summary"
++        ]
++    );
+     history.replay();
+ }
+ 
+@@ -367,3 +401,210 @@ fn recipe_replay_keeps_namespace_and_rejects_broken_typed_chain() {
+             .is_err()
+     );
+ }
++
++fn node(parts: &[u32]) -> NodeId {
++    parts[1..]
++        .iter()
++        .fold(NodeId::root_epoch(parts[0]), |node, ordinal| {
++            node.child(*ordinal)
++        })
++}
++
++fn spawn<const N: usize>(summaries: [&str; N]) -> SpineOperationFact {
++    SpineOperationFact::Spawn {
++        tasks: summaries
++            .into_iter()
++            .map(|summary| SpawnTask {
++                summary: summary.to_string(),
++                prompt: format!("inspect {summary}"),
++            })
++            .collect(),
++    }
++}
++
++fn open(summary: &str) -> SpineOperationFact {
++    SpineOperationFact::Open {
++        summary: summary.to_string(),
++    }
++}
++
++fn close(memory: &str) -> SpineOperationFact {
++    SpineOperationFact::Close {
++        memory: memory.to_string(),
++    }
++}
++
++/// The assembled memory of a closed node, one label per slot.
++fn memory_shape(history: &History, id: &[u32]) -> Vec<String> {
++    let id = node(id);
++    history
++        .runtime
++        .projection()
++        .nodes
++        .iter()
++        .find(|candidate| candidate.id == id)
++        .and_then(|candidate| candidate.memory.clone())
++        .expect("closed node memory")
++        .iter()
++        .map(|slot| match slot {
++            MemorySlot::User { message, .. } => format!("user {}", message.content),
++            MemorySlot::Summary { .. } => "summary".to_string(),
++            MemorySlot::Birth { owner_node, .. } => format!("birth {owner_node}"),
++            MemorySlot::Arrival { arrival, .. } => format!("arrival {}", arrival.producer),
++            MemorySlot::Reply { message, .. } => format!("reply {}", message.content),
++        })
++        .collect()
++}
++
++#[test]
++fn arrival_is_received_at_the_cursor_of_its_admission() {
++    // P = 1.1 spawns 1.1.1 and 1.1.2, then opens Q = 1.1.3.
++    let mut history = History::new("arrival-receiver");
++    history.step(open("P"));
++    history.step(spawn(["left", "right"]));
++    history.step(open("Q"));
++    // Admitted before the sampling that closes Q: received by Q, kept in Q's memory.
++    history.arrival(&[1, 1, 1], SpawnOutcome::Completed, Some("left memory"));
++    history.step(close("Q memory"));
++    assert_eq!(
++        memory_shape(&history, &[1, 1, 3]),
++        vec!["arrival 1.1.1", "summary"]
++    );
++    // Admitted after Q closed: received by P.
++    history.arrival(&[1, 1, 2], SpawnOutcome::Completed, Some("right memory"));
++    history.step(close("P memory"));
++    assert_eq!(
++        memory_shape(&history, &[1, 1]),
++        vec![
++            "birth 1.1.1",
++            "birth 1.1.2",
++            "arrival 1.1.1",
++            "summary",
++            "arrival 1.1.2",
++            "summary"
++        ]
++    );
++    history.replay();
++}
++
++#[test]
++fn arrival_after_open_is_received_by_the_new_node() {
++    let mut history = History::new("arrival-open");
++    history.step(spawn(["left", "right"]));
++    history.step(open("R"));
++    history.arrival(&[1, 1], SpawnOutcome::Completed, Some("left memory"));
++    history.arrival(&[1, 2], SpawnOutcome::Aborted, None);
++    history.step(close("R memory"));
++    assert_eq!(
++        memory_shape(&history, &[1, 3]),
++        vec!["arrival 1.1", "arrival 1.2", "summary"]
++    );
++    let outcomes = history
++        .runtime
++        .projection()
++        .nodes
++        .iter()
++        .filter(|candidate| candidate.kind == spine_core::host::NodeKind::Spawn)
++        .map(|candidate| candidate.spawn_outcome)
++        .collect::<Vec<_>>();
++    assert_eq!(
++        outcomes,
++        vec![Some(SpawnOutcome::Completed), Some(SpawnOutcome::Aborted)]
++    );
++    history.replay();
++}
++
++#[test]
++fn close_and_compact_wait_for_every_birth_in_scope() {
++    let mut history = History::new("arrival-guard");
++    history.step(open("P"));
++    history.step(spawn(["left", "right"]));
++    history.arrival(&[1, 1, 1], SpawnOutcome::Completed, Some("left memory"));
++    history.boundary += 1;
++    let output = SpineChar::Opaque {
++        boundary: RawBoundary(history.boundary),
++    };
++    let error = history
++        .sample(Some(close("too early")), output)
++        .expect_err("close must wait for 1.1.2");
++    assert!(error.to_string().contains("1.1.2"), "{error}");
++
++    let mut history = History::new("arrival-compact");
++    history.step(spawn(["left", "right"]));
++    history.arrival(&[1, 1], SpawnOutcome::Completed, Some("left memory"));
++    let barrier = SpineCompactBarrierV1::new(
++        history.thread.clone(),
++        history.runtime.epoch(),
++        history.runtime.epoch().checked_next().expect("epoch"),
++        RawBoundary(history.boundary),
++        vec![RawBoundary(history.boundary + 1)],
++    )
++    .expect("barrier");
++    let error = history
++        .runtime
++        .compact(barrier)
++        .expect_err("compact must wait for 1.2");
++    assert!(error.to_string().contains("1.2"), "{error}");
++    history.arrival(&[1, 2], SpawnOutcome::Errored, None);
++    history.compact();
++    history.replay();
++}
++
++#[test]
++fn arrival_must_name_one_unarrived_birth() {
++    let mut history = History::new("arrival-identity");
++    history.step(spawn(["left", "right"]));
++    history.arrival(&[1, 1], SpawnOutcome::Completed, Some("left memory"));
++    history.arrival(&[1, 1], SpawnOutcome::Completed, Some("left memory"));
++    let error = history
++        .runtime
++        .preview_context_plan()
++        .expect_err("duplicate arrival");
++    assert!(error.to_string().contains("already arrived"), "{error}");
++
++    let mut history = History::new("arrival-unknown");
++    history.step(open("P"));
++    history.arrival(&[1, 1], SpawnOutcome::Completed, Some("memory"));
++    let error = history
++        .runtime
++        .preview_context_plan()
++        .expect_err("not a birth");
++    assert!(error.to_string().contains("not a birth"), "{error}");
++}
++
++#[test]
++fn close_keeps_replies_and_drops_other_assistant_text() {
++    let mut history = History::new("reply-memory");
++    history.user("outer request");
++    history.step(open("P"));
++    history.say(MessageRole::Assistant, "progress narration");
++    history.say(MessageRole::Reply, "answer to the user");
++    history.user("follow-up");
++    history.step(close("P memory"));
++    assert_eq!(
++        memory_shape(&history, &[1, 1]),
++        vec!["reply answer to the user", "user follow-up", "summary"]
++    );
++    history.replay();
++}
++
++#[test]
++fn arrival_inside_a_sampling_is_rejected() {
++    let mut history = History::new("arrival-inside");
++    history.step(spawn(["left", "right"]));
++    history.boundary += 1;
++    let inside = SpineChar::Arrival {
++        boundary: RawBoundary(history.boundary),
++        arrival: SpawnArrival {
++            producer: node(&[1, 1]),
++            outcome: SpawnOutcome::Completed,
++            memory: Some("left memory".to_string()),
++            diagnostic: None,
++            execution_ref: None,
++        },
++    };
++    let error = history
++        .sample(None, inside)
++        .expect_err("arrival must wait for the sampling boundary");
++    assert!(error.to_string().contains("inside a sampling"), "{error}");
++}

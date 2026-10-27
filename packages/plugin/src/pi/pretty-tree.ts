@@ -56,7 +56,7 @@ export function displayNodesFromProjection(projection: SpineProjection): Display
     kind: node.kind,
     status: node.status,
     summary: node.summary,
-    spawnOutcome: spawnOutcomeFromMemory(node),
+    spawnOutcome: node.spawn_outcome,
   }));
 }
 
@@ -107,19 +107,6 @@ export function linesComponent(lines: readonly string[]): { render: (width: numb
     render: (width) => clampLines(lines, width),
     invalidate() {},
   };
-}
-
-function spawnOutcomeFromMemory(node: NodeSnapshot): SpawnOutcome | null {
-  const slots = node.memory;
-  if (slots === null) return null;
-  const owner = formatNodeId(node.id);
-  for (const slot of slots) {
-    if (!("SpawnEvidence" in slot)) continue;
-    const evidence = slot.SpawnEvidence;
-    if (formatNodeId(evidence.owner_node) !== owner) continue;
-    return evidence.outcome;
-  }
-  return null;
 }
 
 type PrettyLine =
@@ -307,6 +294,7 @@ function bucketable(node: DisplayNode, activePath: ReadonlySet<string>): boolean
 }
 
 function isCompleted(node: DisplayNode): boolean {
+  if (node.kind === "Spawn") return node.spawnOutcome !== null;
   return node.status === "Closed" || node.status === "Compacted";
 }
 

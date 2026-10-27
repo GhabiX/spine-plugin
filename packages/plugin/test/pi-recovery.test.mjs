@@ -432,121 +432,24 @@ test("source binding installation fails closed on a mismatched snapshot", () => 
   );
 });
 
-test("Pi replay validates committed Spawn staging and rejects an uncommitted batch", () => {
-  const terminals = [
-    { ordinal: 0, outcome: "completed", memory_body: "child memory a" },
-    { ordinal: 1, outcome: "completed", memory_body: "child memory b" },
-  ];
-  const staged = {
-    type: "custom",
-    customType: "spine.spawn-terminal.v1",
-    data: { schema: "spine-plugin/pi/v1", batchId: "spawn-1", result: terminals[0] },
-  };
-  const stagedSecond = {
-    ...staged,
-    data: { ...staged.data, result: terminals[1] },
-  };
-  const commit = archive({
-    type: "sampling_commit",
-    record: {
-      ...COMMIT.record,
-      executions: [{
-        execution_id: { thread: "origin-session", value: "execution-1" },
-        ordinal: 0,
-        origin: { type: "direct", execution_ref: "spawn-1" },
-        source_span: {
-          start: { thread: "origin-session", epoch: 0, ordinal: 0 },
-          end: { thread: "origin-session", epoch: 0, ordinal: 1 },
-        },
-        operation: {
-          type: "spawn",
-          tasks: [
-            { summary: "child-a", prompt: "work a" },
-            { summary: "child-b", prompt: "work b" },
-          ],
-          terminal_results: terminals,
-        },
+test("Pi replay admits a durable arrival message as a typed arrival source", () => {
+  const arrival = { producer: [0, 1], outcome: "completed", memory: "child memory" };
+  const plan = buildPiReplayPlan({
+    currentSessionId: "session",
+    branch: [{
+      type: "custom_message",
+      messages: [{
+        role: "custom",
+        customType: "spine.arrival",
+        content: "<spine_arrival/>",
+        display: true,
+        timestamp: 1,
+        details: { schema: "spine.pi.arrival/v1", arrival },
       }],
-    },
-  });
-
-  assert.doesNotThrow(() => buildPiReplayPlan({
-    currentSessionId: "origin-session",
-    branch: [
-      { type: "message", messages: [{ role: "user", content: "request", timestamp: 1 }] },
-      archive(STARTED),
-      staged,
-      stagedSecond,
-      commit,
-    ],
+    }],
     messagesForEntry: (entry) => entry.messages ?? [],
-  }));
-  assert.throws(
-    () => buildPiReplayPlan({
-      currentSessionId: "origin-session",
-      branch: [
-        { type: "message", messages: [{ role: "user", content: "request", timestamp: 1 }] },
-        archive(STARTED),
-        staged,
-      ],
-      messagesForEntry: (entry) => entry.messages ?? [],
-    }),
-    /cannot restore a native tool result/,
-  );
-});
-
-function spawnCommit(terminalResults) {
-  return archive({
-    type: "sampling_commit",
-    record: {
-      ...COMMIT.record,
-      executions: [{
-        execution_id: { thread: "origin-session", value: "execution-1" },
-        ordinal: 0,
-        origin: { type: "direct", execution_ref: "spawn-1" },
-        source_span: {
-          start: { thread: "origin-session", epoch: 0, ordinal: 0 },
-          end: { thread: "origin-session", epoch: 0, ordinal: 1 },
-        },
-        operation: {
-          type: "spawn",
-          tasks: terminalResults.map((_, ordinal) => ({ summary: `child-${ordinal}`, prompt: "work" })),
-          terminal_results: terminalResults,
-        },
-      }],
-    },
   });
-}
-
-function spawnStaging(result) {
-  return {
-    type: "custom",
-    customType: "spine.spawn-terminal.v1",
-    data: { schema: "spine-plugin/pi/v1", batchId: "spawn-1", result },
-  };
-}
-
-test("Pi replay accepts Spawn staging that omits optional fields present as null in the commit", () => {
-  const staged = [
-    { ordinal: 0, outcome: "completed", memory_body: "ALPHA", execution_ref: "spawn-1:0" },
-    { ordinal: 1, outcome: "completed", memory_body: "BETA", execution_ref: "spawn-1:1" },
-  ];
-  const committed = [
-    { ordinal: 0, outcome: "completed", memory_body: "ALPHA", diagnostic: null, execution_ref: "spawn-1:0" },
-    { ordinal: 1, outcome: "completed", memory_body: "BETA", diagnostic: null, execution_ref: "spawn-1:1" },
-  ];
-  assert.notEqual(JSON.stringify(staged), JSON.stringify(committed));
-  assert.doesNotThrow(() => buildPiReplayPlan({
-    currentSessionId: "origin-session",
-    branch: [
-      { type: "message", messages: [{ role: "user", content: "request", timestamp: 1 }] },
-      archive(STARTED),
-      spawnStaging(staged[0]),
-      spawnStaging(staged[1]),
-      spawnCommit(committed),
-    ],
-    messagesForEntry: (entry) => entry.messages ?? [],
-  }));
+  assert.deepEqual(plan.inputs, [{ type: "source", character: { type: "arrival", boundary: 0, arrival } }]);
 });
 
 test("Pi replay skips host system messages before assigning source boundaries", () => {
@@ -567,24 +470,4 @@ test("Pi replay skips host system messages before assigning source boundaries", 
     [0, "user"],
     [1, "toolResult"],
   ]);
-});
-
-test("Pi replay still rejects Spawn staging whose memory disagrees with the commit", () => {
-  assert.throws(
-    () => buildPiReplayPlan({
-      currentSessionId: "origin-session",
-      branch: [
-        { type: "message", messages: [{ role: "user", content: "request", timestamp: 1 }] },
-        archive(STARTED),
-        spawnStaging({ ordinal: 0, outcome: "completed", memory_body: "ALPHA", execution_ref: "spawn-1:0" }),
-        spawnStaging({ ordinal: 1, outcome: "completed", memory_body: "KEEP", execution_ref: "spawn-1:1" }),
-        spawnCommit([
-          { ordinal: 0, outcome: "completed", memory_body: "BETA", diagnostic: null, execution_ref: "spawn-1:0" },
-          { ordinal: 1, outcome: "completed", memory_body: "KEEP", diagnostic: null, execution_ref: "spawn-1:1" },
-        ]),
-      ],
-      messagesForEntry: (entry) => entry.messages ?? [],
-    }),
-    /disagrees with the canonical commit/,
-  );
 });

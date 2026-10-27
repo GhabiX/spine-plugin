@@ -3,8 +3,10 @@ import type {
   ContextPlanCell,
   EpochOrdinalId,
   SourceCharacter,
+  SpawnArrival,
 } from "@spinejit/spine-sdk";
 import type { PublishedContext } from "../controller.js";
+import { PI_ARRIVAL_MESSAGE_TYPE, type PiArrivalDetails } from "./protocol.js";
 
 interface PiTextContent {
   type: "text";
@@ -31,11 +33,11 @@ interface PiThinkingContent {
 
 export const PI_SPINE_NODE_MESSAGE_TYPE = "spine.node";
 export const PI_SPINE_MEMORY_MESSAGE_TYPE = "spine.memory";
-export const PI_SPINE_SPAWN_EVIDENCE_MESSAGE_TYPE = "spine.spawn_evidence";
+export const PI_SPINE_BIRTH_MESSAGE_TYPE = "spine.birth";
 
 export interface PiSpineProjectionDetails {
   schema: "spine.pi.projection/v1";
-  kind: "node" | "memory" | "spawn_evidence";
+  kind: "node" | "memory" | "birth";
   nodeId: string;
   status?: string;
   renderer: "xml";
@@ -118,7 +120,11 @@ export function sourceObservation(
   if (message.role === "toolResult") {
     return { character: { type: "opaque", boundary }, message };
   }
-  const role = sourceRole(message);
+  const arrival = arrivalOf(message);
+  if (arrival !== null) {
+    return { character: { type: "arrival", boundary, arrival }, message };
+  }
+  const role = isReply(message) ? "reply" : sourceRole(message);
   return {
     character: {
       type: "message",
@@ -128,6 +134,37 @@ export function sourceObservation(
     },
     message,
   };
+}
+
+/** The typed arrival a Spine arrival message carries, or null for any other message. */
+export function arrivalOf(message: PiAgentMessage): SpawnArrival | null {
+  if (message.role !== "custom" || message.customType !== PI_ARRIVAL_MESSAGE_TYPE) return null;
+  const details = message.details as Partial<PiArrivalDetails> | undefined;
+  if (details?.schema !== "spine.pi.arrival/v1" || details.arrival === undefined) {
+    throw new PiContextMaterializationError("Spine arrival message has no typed arrival");
+  }
+  return details.arrival;
+}
+
+/** The model-visible text of an arrival; the typed value travels in details. */
+export function arrivalMessage(arrival: SpawnArrival): Extract<PiAgentMessage, { role: "custom" }> {
+  const body = arrival.outcome === "completed" ? arrival.memory! : arrival.diagnostic!;
+  return {
+    role: "custom",
+    customType: PI_ARRIVAL_MESSAGE_TYPE,
+    content: `<spine_arrival node_id="${arrival.producer.join(".")}" outcome="${arrival.outcome}">\n${body}\n</spine_arrival>`,
+    display: true,
+    timestamp: Date.now(),
+    details: { schema: "spine.pi.arrival/v1", arrival } satisfies PiArrivalDetails,
+  };
+}
+
+/** The agent's reply to the user: it ended with stop, has text, and calls no tool. */
+function isReply(message: PiAgentMessage): boolean {
+  return message.role === "assistant" &&
+    message.stopReason === "stop" &&
+    message.content.every((part) => part.type !== "toolCall") &&
+    message.content.some((part) => part.type === "text" && part.text.trim().length > 0);
 }
 
 function sourceCharacterContent(message: PiAgentMessage): string {
@@ -281,29 +318,31 @@ function materializeProjection(
         },
       );
     }
-    if ("SpawnEvidence" in slot) {
-      const evidence = slot.SpawnEvidence;
-      const nodeId = evidence.owner_node.join(".");
+    if ("Birth" in slot) {
+      const { owner_node: owner, task } = slot.Birth;
+      const nodeId = owner.join(".");
       return spineProjectionMessage(
-        PI_SPINE_SPAWN_EVIDENCE_MESSAGE_TYPE,
-        `<spine_spawn_evidence node_id="${nodeId}">\n${JSON.stringify(
-          {
-            summary: evidence.task.summary,
-            prompt: evidence.task.prompt,
-            outcome: evidence.outcome,
-            diagnostic: evidence.diagnostic,
-            execution_ref: evidence.execution_ref,
-          },
-          null,
-          2,
-        )}\n</spine_spawn_evidence>`,
+        PI_SPINE_BIRTH_MESSAGE_TYPE,
+        `<spine_spawn node_id="${nodeId}" summary="${escapeXmlAttribute(task.summary)}">\n${task.prompt}\n</spine_spawn>`,
         {
           schema: "spine.pi.projection/v1",
-          kind: "spawn_evidence",
+          kind: "birth",
           nodeId,
           renderer: "xml",
         },
       );
+    }
+    if ("Reply" in slot) {
+      return {
+        role: "assistant",
+        content: [{ type: "text", text: slot.Reply.message.content }],
+        api: "spine",
+        provider: "spine",
+        model: "spine",
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+        stopReason: "stop",
+        timestamp: 0,
+      };
     }
   }
   throw unsupportedProjection(item);

@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
+
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 import extension, {
   createPiExtension,
@@ -18,6 +22,7 @@ function mockPi() {
   const tools = new Map();
   const commands = new Map();
   const entries = [];
+  const sent = [];
   const eventListeners = new Map();
   let childFlag = false;
   return {
@@ -25,6 +30,7 @@ function mockPi() {
     tools,
     commands,
     entries,
+    sent,
     setChildFlag(value) {
       childFlag = value;
     },
@@ -75,6 +81,9 @@ function mockPi() {
       },
       appendEntry(customType, data) {
         entries.push({ customType, data });
+      },
+      sendMessage(message, options) {
+        sent.push([message, options]);
       },
       async exec() {
         throw new Error("unexpected child execution");
@@ -820,10 +829,93 @@ test("a model request while the prior sampling is still open faults", async () =
   assert.match(faults[0].data.errors.at(-1).message, /before the prior turn ended/);
 });
 
-test("Spawn child invocation inherits parent extensions and preserves the prompt argument", async () => {
+function childReturn(memory) {
+  return {
+    stdout: JSON.stringify({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "toolCall", name: "spine_child_return", arguments: { memory } }],
+      },
+    }),
+    stderr: "",
+    code: 0,
+    killed: false,
+  };
+}
+
+async function until(condition) {
+  for (let tries = 0; !condition(); tries += 1) {
+    if (tries > 200) throw new Error("condition not reached");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
+/** Records what Pi would persist, in order, so a second extension can replay it. */
+function recordBranch(pi) {
+  const branch = [];
+  const emit = pi.emit.bind(pi);
+  // Pi emits message_end before it persists the message.
+  pi.emit = async (name, event, ctx) => {
+    const result = await emit(name, event, ctx);
+    if (name === "message_end") {
+      const message = structuredClone(event.message);
+      branch.push(message.role === "custom"
+        ? { type: "custom_message", id: `e${branch.length}`, customType: message.customType, content: message.content, display: message.display, details: message.details }
+        : { type: "message", id: `e${branch.length}`, message });
+    }
+    return result;
+  };
+  const appendEntry = pi.api.appendEntry;
+  pi.api.appendEntry = (customType, data) => {
+    branch.push({ type: "custom", id: `e${branch.length}`, customType, data: structuredClone(data) });
+    appendEntry(customType, data);
+  };
+  return branch;
+}
+
+/** One model request: the assistant message, its tool calls with their results, then turn_end. */
+async function sample(pi, ctx, calls, text) {
+  const context = await pi.emit("context", { type: "context", messages: [] }, ctx.context);
+  const message = assistant([
+    ...(text === undefined ? [] : [{ type: "text", text }]),
+    ...calls.map((call) => ({ type: "toolCall", id: call.id, name: call.name, arguments: call.input })),
+  ], calls.length === 0 ? "stop" : "toolUse");
+  await pi.emit("message_end", { type: "message_end", message }, ctx.context);
+  const admissions = [];
+  for (const call of calls) {
+    const admission = await pi.emit(
+      "tool_call",
+      { type: "tool_call", toolCallId: call.id, toolName: call.name, input: call.input },
+      ctx.context,
+    );
+    admissions.push(admission);
+    const result = admission?.block
+      ? { content: [{ type: "text", text: admission.reason }], details: {}, isError: true }
+      : { ...(await pi.tools.get(call.name).execute(call.id, call.input, undefined, undefined, ctx.context)), isError: false };
+    await pi.emit("tool_result", { type: "tool_result", toolCallId: call.id, toolName: call.name, input: call.input, ...result }, ctx.context);
+    await pi.emit("message_end", {
+      type: "message_end",
+      message: { role: "toolResult", toolCallId: call.id, toolName: call.name, ...result, timestamp: 3 },
+    }, ctx.context);
+  }
+  await pi.emit("turn_end", { type: "turn_end", turnIndex: 0, message, toolResults: [] }, ctx.context);
+  return { context: context.messages, admissions };
+}
+
+function contents(messages) {
+  return messages.map((message) => typeof message.content === "string"
+    ? message.content
+    : message.content.map((part) => part.text ?? `[${part.type}]`).join(""));
+}
+
+const SPAWN_TASKS = [{ summary: "alpha", prompt: "do alpha work" }, { summary: "beta", prompt: "do beta work" }];
+
+test("Spawn returns at once; children start after the commit and each arrives on its own", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-spine-spawn-live-"));
   const pi = mockPi();
-  const ctx = extensionContext("pi-session", {
-    sessionFile: "/tmp/parent-session.jsonl",
+  const ctx = extensionContext("pi-live", {
+    sessionFile: join(dir, "parent.jsonl"),
     branch: [{
       type: "message",
       id: "aaaaaaaa",
@@ -832,339 +924,191 @@ test("Spawn child invocation inherits parent extensions and preserves the prompt
       message: { role: "user", content: "parent prefix TOKEN", timestamp: 1 },
     }],
   });
-  let childCommand;
-  let childArgs;
-  const childInvocations = [];
+  const invocations = [];
   pi.api.exec = async (command, args) => {
-    childCommand = command;
-    childArgs = args;
-    childInvocations.push(args);
-    return {
-      stdout: JSON.stringify({
-        type: "message_end",
-        message: {
-          role: "assistant",
-          content: [{
-            type: "toolCall",
-            name: "spine_child_return",
-            arguments: { memory: "typed child memory" },
-          }],
-        },
-      }),
-      stderr: "",
-      code: 0,
-      killed: false,
-    };
+    invocations.push({ command, args });
+    return childReturn(args.at(-1).includes("You are: alpha") ? "alpha memory" : "beta memory");
   };
   createPiExtension()(pi.api);
   await pi.emit("session_start", { type: "session_start", reason: "new" }, ctx.context);
+  await pi.emit("message_end", { type: "message_end", message: user("request") }, ctx.context);
+  await sample(pi, ctx, [{ id: "open-1", name: "spine_open", input: { goal: "work" } }]);
+
+  // The tool only acknowledges; nothing runs until turn_end commits the births.
+  const spawn = { id: "spawn-1", name: "spine_spawn", input: { tasks: SPAWN_TASKS } };
+  const spawnCall = assistant([{ type: "toolCall", id: spawn.id, name: spawn.name, arguments: spawn.input }], "toolUse");
   await pi.emit("context", { type: "context", messages: [] }, ctx.context);
-  await pi.emit(
-    "tool_call",
-    {
-      type: "tool_call",
-      toolCallId: "spawn-1",
-      toolName: "spine_spawn",
-      input: { tasks: [{ summary: "child", prompt: "do exact work" }, { summary: "peer", prompt: "do peer work" }] },
-    },
-    ctx.context,
-  );
-  const result = await pi.tools.get("spine_spawn").execute(
-    "spawn-1",
-    { tasks: [{ summary: "child", prompt: "do exact work" }, { summary: "peer", prompt: "do peer work" }] },
-    undefined,
-    undefined,
-    ctx.context,
-  );
+  await pi.emit("message_end", { type: "message_end", message: spawnCall }, ctx.context);
+  await pi.emit("tool_call", { type: "tool_call", toolCallId: spawn.id, toolName: spawn.name, input: spawn.input }, ctx.context);
+  const accepted = await pi.tools.get("spine_spawn").execute(spawn.id, spawn.input, undefined, undefined, ctx.context);
+  assert.match(accepted.content[0].text, /accepted 2 tasks/);
+  assert.equal(invocations.length, 0);
+  await pi.emit("tool_result", { type: "tool_result", toolCallId: spawn.id, toolName: spawn.name, input: spawn.input, ...accepted, isError: false }, ctx.context);
+  await pi.emit("message_end", {
+    type: "message_end",
+    message: { role: "toolResult", toolCallId: spawn.id, toolName: spawn.name, ...accepted, isError: false, timestamp: 3 },
+  }, ctx.context);
+  await pi.emit("turn_end", { type: "turn_end", turnIndex: 0, message: spawnCall, toolResults: [] }, ctx.context);
+  await until(() => pi.sent.length === 2);
 
-  const invocation = resolvePiInvocation({
-    execPath: process.execPath,
-    execArgv: process.execArgv,
-    argv: process.argv,
-  });
-  assert.equal(childCommand, invocation.command);
-  assert.deepEqual(childArgs.slice(0, invocation.args.length), invocation.args);
-  assert.equal(childArgs.includes("--no-session"), false);
-  assert.ok(childArgs.includes("--session"));
-  assert.equal(childArgs.includes("--no-extensions"), false);
-  assert.ok(childArgs.includes("--extension"));
-  assert.ok(childArgs.includes("--spine-child=true"));
-  assert.ok(childArgs.includes(`--spine-parent-pid=${process.pid}`));
-  assert.ok(childArgs.includes("--tools"));
-  const tools = childArgs[childArgs.indexOf("--tools") + 1];
-  assert.match(tools, /\bread\b/);
-  assert.match(tools, /\bbash\b/);
-  assert.match(tools, /\bspine_child_return\b/);
-  assert.ok(childArgs.includes("--provider"));
-  assert.equal(childArgs[childArgs.indexOf("--provider") + 1], "google");
-  assert.ok(childArgs.includes("--model"));
-  assert.equal(childArgs[childArgs.indexOf("--model") + 1], "gemini-3.8-flash");
-  assert.ok(childArgs.includes("--thinking"));
-  assert.equal(childArgs[childArgs.indexOf("--thinking") + 1], "low");
-  const peerArgs = childInvocations.find((args) => args.at(-1)?.includes("You are: peer"));
-  assert.ok(peerArgs);
-  const sessionPath = peerArgs[peerArgs.indexOf("--session") + 1];
-  assert.equal(sessionPath, "/tmp/spine-spawn/spawn-1/1.jsonl");
-  const prefix = await readFile(sessionPath, "utf8");
-  assert.match(prefix, /parent prefix TOKEN/);
-  assert.match(prefix, /"parentSession":"\/tmp\/parent-session.jsonl"/);
-  assert.match(peerArgs.at(-1), /You are: peer/);
-  assert.match(peerArgs.at(-1), /already an active branch scope/);
-  assert.match(peerArgs.at(-1), /Assignment:\ndo peer work/);
-  assert.equal(result.details.results[0].memory_body, "typed child memory");
-  assert.equal(pi.entries.at(-1).customType, "spine.spawn-terminal.v1");
+  const invocation = resolvePiInvocation({ execPath: process.execPath, execArgv: process.execArgv, argv: process.argv });
+  const alpha = invocations.find(({ args }) => args.at(-1).includes("You are: alpha"));
+  assert.equal(alpha.command, invocation.command);
+  assert.ok(alpha.args.includes("--spine-child=true"));
+  assert.ok(alpha.args.includes(`--spine-parent-pid=${process.pid}`));
+  assert.match(alpha.args.at(-1), /^- beta$/m);
+  const sessionPath = alpha.args[alpha.args.indexOf("--session") + 1];
+  assert.equal(sessionPath, join(dir, "spine-spawn", "pi-live", "1.1.1.jsonl"));
+  assert.match(await readFile(sessionPath, "utf8"), /parent prefix TOKEN/);
+
+  const arrivals = pi.sent.map(([message]) => message.details.arrival).sort((a, b) => a.producer.join(".").localeCompare(b.producer.join(".")));
+  assert.deepEqual(arrivals.map(({ producer, outcome, memory }) => [producer.join("."), outcome, memory]), [
+    ["1.1.1", "completed", "alpha memory"],
+    ["1.1.2", "completed", "beta memory"],
+  ]);
+  assert.deepEqual(pi.sent.map(([, options]) => options), [
+    { deliverAs: "steer", triggerTurn: true },
+    { deliverAs: "steer", triggerTurn: true },
+  ]);
+
+  // Close waits for every birth in its scope.
+  const early = await sample(pi, ctx, [{ id: "close-early", name: "spine_close", input: { memory: "too soon" } }], "narration inside the node");
+  assert.equal(early.admissions[0].block, true);
+  assert.match(early.admissions[0].reason, /1\.1\.1 \(alpha\), 1\.1\.2 \(beta\) have not arrived/);
+
+  await pi.emit("message_end", { type: "message_end", message: pi.sent[0][0] }, ctx.context);
+  const partial = await sample(pi, ctx, [{ id: "close-partial", name: "spine_close", input: { memory: "still early" } }]);
+  assert.equal(partial.admissions[0].block, true);
+  await pi.emit("message_end", { type: "message_end", message: pi.sent[1][0] }, ctx.context);
+
+  await sample(pi, ctx, [], "interim answer for the user");
+  await sample(pi, ctx, [{ id: "close-1", name: "spine_close", input: { memory: "node memory" } }]);
+  assert.equal(ctx.aborts, 0);
+  const after = contents((await pi.emit("context", { type: "context", messages: [] }, ctx.context)).messages);
+  const once = (pattern) => after.filter((text) => pattern.test(text)).length;
+  assert.equal(once(/<spine_spawn node_id="1\.1\.1" summary="alpha">/), 1);
+  assert.equal(once(/<spine_arrival node_id="1\.1\.1" outcome="completed">\nalpha memory/), 1);
+  assert.equal(once(/<spine_arrival node_id="1\.1\.2" outcome="completed">\nbeta memory/), 1);
+  assert.equal(once(/^interim answer for the user$/), 1);
+  assert.equal(once(/narration inside the node/), 0);
+  assert.equal(once(/<spine_memory node_id="1\.1">\nnode memory/), 1);
+  const order = ["<spine_spawn node_id=\"1.1.1\"", "<spine_arrival node_id=\"1.1.1\"", "interim answer", "<spine_memory node_id=\"1.1\""]
+    .map((marker) => after.findIndex((text) => text.includes(marker)));
+  assert.deepEqual([...order].sort((a, b) => a - b), order);
 });
 
-test("Spawn records typed nonzero child memory as an errored receipt", async () => {
-  const typed = mockPi();
-  const typedCtx = extensionContext();
-  typed.api.exec = async () => ({
-    stdout: JSON.stringify({
-      type: "message_end",
-      message: {
-        role: "assistant",
-        content: [{
-          type: "toolCall",
-          name: "spine_child_return",
-          arguments: { memory: "bounded failure memory" },
-        }],
-      },
-    }),
-    stderr: "child failed after return",
-    code: 2,
-    killed: false,
-  });
-  createPiExtension()(typed.api);
-  await typed.emit("session_start", { type: "session_start", reason: "new" }, typedCtx.context);
-  await typed.emit("context", { type: "context", messages: [] }, typedCtx.context);
-  await typed.emit(
-    "tool_call",
-    {
-      type: "tool_call",
-      toolCallId: "spawn-typed-failure",
-      toolName: "spine_spawn",
-      input: { tasks: [{ summary: "child", prompt: "fail after return" }, { summary: "peer", prompt: "peer fallback" }] },
-    },
-    typedCtx.context,
-  );
-  const typedResult = await typed.tools.get("spine_spawn").execute(
-    "spawn-typed-failure",
-    { tasks: [{ summary: "child", prompt: "fail after return" }, { summary: "peer", prompt: "peer fallback" }] },
-    undefined,
-    undefined,
-    typedCtx.context,
-  );
-  assert.deepEqual(
-    {
-      outcome: typedResult.details.results[0].outcome,
-      memory: typedResult.details.results[0].memory_body,
-      diagnostic: typedResult.details.results[0].diagnostic,
-    },
-    {
-      outcome: "errored",
-      memory: "bounded failure memory",
-      diagnostic: "child failed after return",
-    },
-  );
-});
-
-test("Spawn records mixed receipts when one child omits typed return", async () => {
+test("after a restart a returned child is redelivered without running, an unreturned one is abandoned", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-spine-spawn-restart-"));
+  const sessionFile = join(dir, "parent.jsonl");
   const pi = mockPi();
-  const ctx = extensionContext();
-  pi.api.exec = async (_command, args) => {
-    const assignment = args.at(-1);
-    if (typeof assignment === "string" && assignment.includes("You are: peer")) {
-      return {
-        stdout: JSON.stringify({
-          type: "message_end",
-          message: {
-            role: "assistant",
-            content: [{
-              type: "toolCall",
-              name: "spine_child_return",
-              arguments: { memory: "typed sibling memory" },
-            }],
-          },
-        }),
-        stderr: "",
-        code: 0,
-        killed: false,
-      };
-    }
-    return {
-      stdout: "child process crashed",
-      stderr: "fatal",
-      code: 2,
-      killed: false,
-    };
+  const branch = recordBranch(pi);
+  const ctx = extensionContext("pi-restart", { sessionFile });
+  ctx.context.sessionManager.getBranch = () => branch;
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  let started = 0;
+  pi.api.exec = async () => {
+    started += 1;
+    return held;
   };
   createPiExtension()(pi.api);
   await pi.emit("session_start", { type: "session_start", reason: "new" }, ctx.context);
-  await pi.emit("context", { type: "context", messages: [] }, ctx.context);
-  await pi.emit(
-    "tool_call",
-    {
-      type: "tool_call",
-      toolCallId: "spawn-mixed",
-      toolName: "spine_spawn",
-      input: { tasks: [{ summary: "child", prompt: "crash" }, { summary: "peer", prompt: "succeed" }] },
-    },
-    ctx.context,
-  );
-  const result = await pi.tools.get("spine_spawn").execute(
-    "spawn-mixed",
-    { tasks: [{ summary: "child", prompt: "crash" }, { summary: "peer", prompt: "succeed" }] },
-    undefined,
-    undefined,
-    ctx.context,
-  );
-  assert.equal(result.details.results.length, 2);
-  assert.equal(result.details.results[0].outcome, "errored");
-  assert.match(result.details.results[0].memory_body, /0 typed terminal memories/);
-  assert.match(result.details.results[0].diagnostic, /fatal/);
-  assert.equal(result.details.results[1].outcome, "completed");
-  assert.equal(result.details.results[1].memory_body, "typed sibling memory");
-  assert.equal(
-    pi.entries.filter((entry) => entry.customType === "spine.spawn-terminal.v1").length,
-    2,
-  );
+  await pi.emit("message_end", { type: "message_end", message: user("request") }, ctx.context);
+  await sample(pi, ctx, [{ id: "spawn-1", name: "spine_spawn", input: { tasks: SPAWN_TASKS } }]);
+  await until(() => started === 2);
+  // The parent dies before either arrival is admitted; alpha had written its return.
+  const alphaSession = SessionManager.open(join(dir, "spine-spawn", "pi-restart", "1.1.jsonl"), undefined, "/tmp");
+  alphaSession.appendMessage({
+    role: "assistant",
+    content: [{ type: "toolCall", id: "r", name: "spine_child_return", arguments: { memory: "alpha memory" } }],
+    api: "test", provider: "test", model: "test",
+    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+    stopReason: "toolUse",
+    timestamp: 5,
+  });
+  await pi.emit("session_shutdown", { type: "session_shutdown", reason: "quit" }, ctx.context);
+  release(childReturn("too late"));
+
+  const restarted = mockPi();
+  restarted.api.exec = async () => {
+    throw new Error("recovery must not rerun a child");
+  };
+  const headless = extensionContext("pi-restart", { sessionFile, branch });
+  headless.context.hasUI = false;
+  createPiExtension()(restarted.api);
+  await restarted.emit("session_start", { type: "session_start", reason: "resume" }, headless.context);
+  await until(() => restarted.sent.length === 2);
+  const byProducer = Object.fromEntries(restarted.sent.map(([message, options]) => [message.details.arrival.producer.join("."), [message.details.arrival, options]]));
+  assert.deepEqual(byProducer["1.1"], [{ producer: [1, 1], outcome: "completed", memory: "alpha memory" }, { deliverAs: "steer", triggerTurn: false }]);
+  assert.equal(byProducer["1.2"][0].outcome, "aborted");
+  assert.match(byProducer["1.2"][0].diagnostic, /restarted before this child returned/);
+  assert.equal(pi.sent.length, 0);
+  assert.equal(headless.aborts, 0);
 });
 
-test("Spawn Continue reuses the same session and restores missing assignment context once", async () => {
-  const calls = [];
-  const choices = [];
-  const ctx = extensionContext("pi-session", {
-    sessionFile: "/tmp/parent-spawn-recovery.jsonl",
-    select: async (_title, options) => {
-      choices.push(options);
-      return "Continue";
-    },
-    input: async () => "focus on the existing work",
-  });
+test("Stop cancels running children; their aborted arrivals do not wake the agent", async () => {
   const pi = mockPi();
-  pi.api.exec = async (_command, args) => {
-    const sessionPath = args[args.indexOf("--session") + 1];
-    const prompt = args.at(-1);
-    calls.push({ sessionPath, prompt });
-    if (prompt.includes("You are: peer")) {
-      return {
-        stdout: JSON.stringify({
-          type: "message_end",
-          message: {
-            role: "assistant",
-            content: [{
-              type: "toolCall",
-              name: "spine_child_return",
-              arguments: { memory: "peer child memory" },
-            }],
-          },
-        }),
-        stderr: "",
-        code: 0,
-        killed: false,
-      };
-    }
-    const childAttempts = calls.filter(({ prompt: childPrompt }) =>
-      childPrompt.includes("You are: child"),
-    ).length;
-    if (childAttempts === 1) {
-      return { stdout: "", stderr: "first attempt failed", code: 1, killed: false };
-    }
-    return {
-      stdout: JSON.stringify({
-        type: "message_end",
-        message: {
-          role: "assistant",
-          content: [{
-            type: "toolCall",
-            name: "spine_child_return",
-            arguments: { memory: "continued child memory" },
-          }],
-        },
-      }),
-      stderr: "",
-      code: 0,
-      killed: false,
-    };
-  };
+  const ctx = extensionContext("pi-stop", { sessionFile: join(await mkdtemp(join(tmpdir(), "pi-spine-stop-")), "parent.jsonl") });
+  // Like pi.exec, an already-aborted signal kills at once.
+  pi.api.exec = (_command, _args, options) => new Promise((resolve) => {
+    const killed = () => resolve({ stdout: "", stderr: "terminated", code: 143, killed: true });
+    if (options.signal.aborted) killed();
+    else options.signal.addEventListener("abort", killed, { once: true });
+  });
   createPiExtension()(pi.api);
   await pi.emit("session_start", { type: "session_start", reason: "new" }, ctx.context);
-  await pi.emit("context", { type: "context", messages: [] }, ctx.context);
-  const tasks = [
-    { summary: "child", prompt: "recover exact work" },
-    { summary: "peer", prompt: "complete peer work" },
-  ];
-  await pi.emit(
-    "tool_call",
-    {
-      type: "tool_call",
-      toolCallId: "spawn-gated-continue",
-      toolName: "spine_spawn",
-      input: { tasks },
-    },
-    ctx.context,
-  );
-  const result = await pi.tools.get("spine_spawn").execute(
-    "spawn-gated-continue",
-    { tasks },
-    undefined,
-    undefined,
-    ctx.context,
-  );
-
-  assert.deepEqual(choices, [["Continue", "Retry", "Abandon"]]);
-  const childCalls = calls.filter(({ prompt }) => prompt.includes("You are: child"));
-  assert.equal(childCalls.length, 2);
-  assert.equal(childCalls[0].sessionPath, childCalls[1].sessionPath);
-  assert.match(childCalls[1].prompt, /Assignment context:/);
-  assert.equal(result.details.results[0].outcome, "completed");
-  assert.equal(result.details.results[0].memory_body, "continued child memory");
+  await pi.emit("message_end", { type: "message_end", message: user("request") }, ctx.context);
+  await sample(pi, ctx, [{ id: "spawn-1", name: "spine_spawn", input: { tasks: SPAWN_TASKS } }]);
+  assert.equal(pi.sent.length, 0);
+  await pi.emit("agent_settled", { type: "agent_settled", aborted: true }, ctx.context);
+  await until(() => pi.sent.length === 2);
+  for (const [message, options] of pi.sent) {
+    assert.equal(message.details.arrival.outcome, "aborted");
+    assert.deepEqual(options, { deliverAs: "steer", triggerTurn: false });
+  }
 });
 
-test("Pi exec rejection remains host-fatal and does not open the recovery gate", async () => {
-  let selectCalls = 0;
-  const ctx = extensionContext("pi-session", {
-    sessionFile: "/tmp/parent-spawn-reject.jsonl",
-    select: async () => {
-      selectCalls += 1;
-      return "Retry";
-    },
-    input: async () => "",
-  });
+test("without a UI the settled agent waits for a running child, whose arrival starts the next turn", async () => {
   const pi = mockPi();
+  const ctx = extensionContext("pi-print", { sessionFile: join(await mkdtemp(join(tmpdir(), "pi-spine-print-")), "parent.jsonl") });
+  ctx.context.hasUI = false;
+  const gates = [];
+  pi.api.exec = () => new Promise((resolve) => gates.push(resolve));
+  createPiExtension()(pi.api);
+  await pi.emit("session_start", { type: "session_start", reason: "new" }, ctx.context);
+  await pi.emit("message_end", { type: "message_end", message: user("request") }, ctx.context);
+  await sample(pi, ctx, [{ id: "spawn-1", name: "spine_spawn", input: { tasks: SPAWN_TASKS } }]);
+  await until(() => gates.length === 2);
+  let settled = false;
+  const waiting = pi.emit("agent_settled", { type: "agent_settled", aborted: false }, ctx.context).then(() => { settled = true; });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(settled, false);
+  gates[0](childReturn("first memory"));
+  await waiting;
+  assert.equal(pi.sent.length, 1);
+  assert.deepEqual(pi.sent[0][1], { deliverAs: "steer", triggerTurn: true });
+});
+
+test("a child that cannot start arrives as errored without faulting the parent; compaction waits for it", async () => {
+  const pi = mockPi();
+  const ctx = extensionContext("pi-reject", { sessionFile: join(await mkdtemp(join(tmpdir(), "pi-spine-reject-")), "parent.jsonl") });
   pi.api.exec = async () => {
     throw new Error("host transport failure");
   };
   createPiExtension()(pi.api);
   await pi.emit("session_start", { type: "session_start", reason: "new" }, ctx.context);
-  await pi.emit("context", { type: "context", messages: [] }, ctx.context);
-  await pi.emit(
-    "tool_call",
-    {
-      type: "tool_call",
-      toolCallId: "spawn-gated-reject",
-      toolName: "spine_spawn",
-      input: { tasks: [
-        { summary: "child", prompt: "fail host" },
-        { summary: "peer", prompt: "peer host" },
-      ] },
-    },
-    ctx.context,
-  );
-  await assert.rejects(
-    pi.tools.get("spine_spawn").execute(
-      "spawn-gated-reject",
-      { tasks: [
-        { summary: "child", prompt: "fail host" },
-        { summary: "peer", prompt: "peer host" },
-      ] },
-      undefined,
-      undefined,
-      ctx.context,
-    ),
-    /failed at ordinal 0/,
-  );
-  assert.equal(selectCalls, 0);
+  await pi.emit("message_end", { type: "message_end", message: user("request") }, ctx.context);
+  await sample(pi, ctx, [{ id: "spawn-1", name: "spine_spawn", input: { tasks: SPAWN_TASKS } }]);
+  await until(() => pi.sent.length === 2);
+  assert.deepEqual(pi.sent.map(([message]) => [message.details.arrival.outcome, message.details.arrival.diagnostic]), [
+    ["errored", "host transport failure"],
+    ["errored", "host transport failure"],
+  ]);
+  assert.equal(ctx.aborts, 0);
+
+  const compact = await pi.emit("session_before_compact", { type: "session_before_compact" }, ctx.context);
+  assert.deepEqual(compact, { cancel: true });
+  assert.match(ctx.notifications.at(-1)[0], /compaction waits for spawned children 1\.1 \(alpha\), 1\.2 \(beta\)/);
 });
 
 test("root close and next return to the model without aborting", async () => {

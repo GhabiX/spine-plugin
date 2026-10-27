@@ -25,7 +25,7 @@ fn native_runtime_matches_the_portable_golden_trace() {
         .as_str()
         .expect("prepared transaction must have an id");
     let install = json!({
-        "schema": "spine-sdk/v2",
+        "schema": "spine-sdk/v3",
         "request": {
             "type": "install_prepared",
             "transaction_id": transaction_id,

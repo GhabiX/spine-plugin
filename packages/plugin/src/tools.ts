@@ -22,13 +22,14 @@ export function isSpineToolName(name: string): name is SpineToolName {
 }
 
 export function operationFromSpineToolCall(
-  toolName: Exclude<SpineToolName, "spine_spawn">,
+  toolName: SpineToolName,
   input: Record<string, unknown>,
 ): SpineOperation {
   switch (toolName) {
     case "spine_open": return validateInput("open", input);
     case "spine_close": return validateInput("close", input);
     case "spine_next": return validateInput("next", input);
+    case "spine_spawn": return validateInput("spawn", input);
   }
 }
 

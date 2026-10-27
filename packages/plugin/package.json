@@ -43,14 +43,6 @@
     "./pi/tree-style": {
       "types": "./dist/pi/tree-style.d.ts",
       "import": "./dist/pi/tree-style.js"
-    },
-    "./deepseek-harness": {
-      "types": "./dist/deepseek-harness/index.d.ts",
-      "import": "./dist/deepseek-harness/index.js"
-    },
-    "./deepseek-harness/extension": {
-      "types": "./dist/deepseek-harness/extension.d.ts",
-      "import": "./dist/deepseek-harness/extension.js"
     }
   },
   "files": [

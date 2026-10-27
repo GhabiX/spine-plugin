@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -52,19 +52,86 @@ Assignment:
 ${task.prompt}`;
 }
 
-export function childSessionPath(options: {
-  batchId: string;
-  ordinal: number;
+export interface ChildSessionScope {
+  /** The parent Pi session id; birth ids are unique only within it. */
+  parentSessionId: string;
   parentSessionFile?: string;
-  attempt?: number;
-}): string {
-  const root = options.parentSessionFile === undefined
+}
+
+/** A child's session file for one attempt, named by its birth id. */
+export function childSessionPath(
+  scope: ChildSessionScope,
+  producer: readonly number[],
+  attempt = 0,
+): string {
+  const name = attempt === 0
+    ? `${producer.join(".")}.jsonl`
+    : `${producer.join(".")}.attempt-${attempt}.jsonl`;
+  return join(childSessionDir(scope), name);
+}
+
+function childSessionDir(scope: ChildSessionScope): string {
+  const root = scope.parentSessionFile === undefined
     ? join(tmpdir(), "pi-spine-spawn")
-    : join(dirname(options.parentSessionFile), "spine-spawn");
-  const suffix = options.attempt === undefined || options.attempt === 0
-    ? `${options.ordinal}.jsonl`
-    : `${options.ordinal}.attempt-${options.attempt}.jsonl`;
-  return join(root, safeSegment(options.batchId), suffix);
+    : join(dirname(scope.parentSessionFile), "spine-spawn");
+  return join(root, safeSegment(scope.parentSessionId));
+}
+
+/**
+ * The child's own durable result: the memory of its last spine_child_return
+ * across attempts, or null when no attempt returned. `latest` is the newest
+ * attempt's session file, if any.
+ */
+export async function readChildReturn(
+  scope: ChildSessionScope,
+  producer: readonly number[],
+): Promise<{ memory: string | null; latest: { path: string; attempt: number } | null }> {
+  const pattern = new RegExp(`^${producer.join("\\.")}(?:\\.attempt-(\\d+))?\\.jsonl$`);
+  let names: string[];
+  try {
+    names = await readdir(childSessionDir(scope));
+  } catch {
+    return { memory: null, latest: null };
+  }
+  const attempts = names
+    .map((name) => ({ name, match: pattern.exec(name) }))
+    .filter((item) => item.match !== null)
+    .map((item) => ({ path: join(childSessionDir(scope), item.name), attempt: Number(item.match![1] ?? 0) }))
+    .sort((left, right) => left.attempt - right.attempt);
+  let memory: string | null = null;
+  for (const attempt of attempts) {
+    memory = returnedMemory(await readFile(attempt.path, "utf8")) ?? memory;
+  }
+  return { memory, latest: attempts.at(-1) ?? null };
+}
+
+function returnedMemory(sessionJsonl: string): string | null {
+  let memory: string | null = null;
+  for (const line of sessionJsonl.split("\n")) {
+    if (line.trim().length === 0) continue;
+    let entry: unknown;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    const message = isRecord(entry) && entry.type === "message" && isRecord(entry.message) ? entry.message : null;
+    if (message === null || message.role !== "assistant" || !Array.isArray(message.content)) continue;
+    for (const item of message.content) {
+      if (
+        isRecord(item) && item.type === "toolCall" && item.name === CHILD_RETURN_TOOL &&
+        isRecord(item.arguments) && typeof item.arguments.memory === "string" &&
+        item.arguments.memory.trim().length > 0
+      ) {
+        memory = item.arguments.memory;
+      }
+    }
+  }
+  return memory;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 export async function writeChildPrefixSession(options: {

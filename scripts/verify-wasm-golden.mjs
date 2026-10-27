@@ -22,7 +22,7 @@ outputs.push(
   JSON.parse(
     runtime.dispatch(
       JSON.stringify({
-        schema: "spine-sdk/v2",
+        schema: "spine-sdk/v3",
         request: { type: "install_prepared", transaction_id: transactionId },
       }),
     ),

@@ -5,7 +5,6 @@ import {
   type FeatureFlag,
   type SafeInteger,
   type SpineOperation,
-  type SpawnTask,
   type ThreadNamespace,
 } from "./protocol.js";
 import { SpineRuntimeClient, type RuntimeTransport } from "./runtime.js";
@@ -28,9 +27,8 @@ const binding = require("../wasm/node/spine_wasm.cjs") as {
   validate_tool_input(tool: string, argumentsJson: string): string;
 };
 
-export type SpineToolInput =
-  | Exclude<SpineOperation, { type: "spawn" }>
-  | { type: "spawn"; tasks: SpawnTask[] };
+/** A validated Spine tool input is exactly the operation it stages. */
+export type SpineToolInput = SpineOperation;
 
 /** Uses core's pure input validator without creating or mutating a session. */
 export function validateSpineToolInput<T extends SpineToolInput["type"]>(

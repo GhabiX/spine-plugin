@@ -1,0 +1,289 @@
+ M README.md
+R  provenance/node-wasm-build.json -> archive/core_patch_snapshot_20261027/node-wasm-build.json
+R  provenance/spine-core-cb01f18.patch -> archive/core_patch_snapshot_20261027/spine-core-cb01f18.patch
+R  packages/plugin/src/deepseek-harness/extension.ts -> archive/dsh_adapter_v0_20261027/src/deepseek-harness/extension.ts
+R  packages/plugin/src/deepseek-harness/index.ts -> archive/dsh_adapter_v0_20261027/src/deepseek-harness/index.ts
+R  packages/plugin/src/deepseek-harness/lifecycle.ts -> archive/dsh_adapter_v0_20261027/src/deepseek-harness/lifecycle.ts
+R  packages/plugin/src/deepseek-harness/messages.ts -> archive/dsh_adapter_v0_20261027/src/deepseek-harness/messages.ts
+R  packages/plugin/src/deepseek-harness/recovery.ts -> archive/dsh_adapter_v0_20261027/src/deepseek-harness/recovery.ts
+R  packages/plugin/test/deepseek-harness-lifecycle.test.mjs -> archive/dsh_adapter_v0_20261027/test/deepseek-harness-lifecycle.test.mjs
+R  packages/plugin/test/dsh-messages-recovery.test.mjs -> archive/dsh_adapter_v0_20261027/test/dsh-messages-recovery.test.mjs
+ M core-source.json
+ M crates/spine-wasm/src/dto.rs
+ M crates/spine-wasm/tests/portable_golden.rs
+ M crates/spine-wasm/tests/portable_runtime.rs
+ M doc/ABI.md
+ M fixtures/conformance/portable-runtime-golden.json
+ M packages/plugin/package.json
+ M packages/plugin/src/pi/child-session.ts
+ M packages/plugin/src/pi/extension.ts
+ M packages/plugin/src/pi/index.ts
+ M packages/plugin/src/pi/lifecycle.ts
+ M packages/plugin/src/pi/messages.ts
+ M packages/plugin/src/pi/pretty-tree.ts
+ M packages/plugin/src/pi/protocol.ts
+ M packages/plugin/src/pi/recovery.ts
+ M packages/plugin/src/pi/spawn-view.ts
+ M packages/plugin/src/pi/tree-style.ts
+ M packages/plugin/src/spawn.ts
+ M packages/plugin/src/tools.ts
+ M packages/plugin/test/child-session.test.mjs
+ M packages/plugin/test/host-adapters.test.mjs
+ M packages/plugin/test/pi-extension.test.mjs
+ M packages/plugin/test/pi-lifecycle.test.mjs
+ M packages/plugin/test/pi-messages.test.mjs
+ M packages/plugin/test/pi-recovery.test.mjs
+ M packages/plugin/test/spawn-view.test.mjs
+ M packages/plugin/test/spawn.test.mjs
+ M packages/sdk/src/node.ts
+ M packages/sdk/src/protocol.ts
+ M packages/sdk/wasm/node/spine_wasm_bg.wasm
+ M packages/spinetree-navigation/src/data.ts
+ M packages/spinetree-navigation/test/data.test.mjs
+ M scripts/verify-core-source.mjs
+ M scripts/verify-wasm-golden.mjs
+?? archive/dsh_adapter_v0_20261027/test/host-adapters.test.mjs
+?? archive/dsh_api_survey_20261027_1501/
+?? archive/pi_spinejit_rename_20261008_1722/evidence/
+?? archive/pi_spinejit_rename_20261008_1722/validation/auth-state.json
+?? archive/pi_spinejit_rename_20261008_1722/validation/catalog-completed.txt
+?? archive/pi_spinejit_rename_20261008_1722/validation/consumer-install.log
+?? archive/pi_spinejit_rename_20261008_1722/validation/consumer-smoke.json
+?? archive/pi_spinejit_rename_20261008_1722/validation/consumer-smoke.stderr
+?? archive/pi_spinejit_rename_20261008_1722/validation/core-source.log
+?? archive/pi_spinejit_rename_20261008_1722/validation/final-online.json
+?? archive/pi_spinejit_rename_20261008_1722/validation/npm-cli-install.log
+?? archive/pi_spinejit_rename_20261008_1722/validation/npm-test.log
+?? archive/pi_spinejit_rename_20261008_1722/validation/pack.json
+?? archive/pi_spinejit_rename_20261008_1722/validation/pi-catalog-final.txt
+?? archive/pi_spinejit_rename_20261008_1722/validation/pi-catalog-latest.txt
+?? archive/pi_spinejit_rename_20261008_1722/validation/pi-catalog.json
+?? archive/pi_spinejit_rename_20261008_1722/validation/pi-catalog.txt
+?? archive/pi_spinejit_rename_20261008_1722/validation/pi-install-final.log
+?? archive/pi_spinejit_rename_20261008_1722/validation/pi-install-retry.log
+?? archive/pi_spinejit_rename_20261008_1722/validation/pi-install.log
+?? archive/pi_spinejit_rename_20261008_1722/validation/pi-list.log
+?? archive/pi_spinejit_rename_20261008_1722/validation/publish-dry-run.json
+?? archive/pi_spinejit_rename_20261008_1722/validation/publish-dry-run.stderr
+?? archive/pi_spinejit_rename_20261008_1722/validation/publish.json
+?? archive/pi_spinejit_rename_20261008_1722/validation/publish.stderr
+?? archive/pi_spinejit_rename_20261008_1722/validation/registry-consumer-install-final.log
+?? archive/pi_spinejit_rename_20261008_1722/validation/registry-consumer-install-retry.log
+?? archive/pi_spinejit_rename_20261008_1722/validation/registry-consumer-install.log
+?? archive/pi_spinejit_rename_20261008_1722/validation/registry-consumer-npm11.log
+?? archive/pi_spinejit_rename_20261008_1722/validation/registry-consumer-smoke.json
+?? archive/pi_spinejit_rename_20261008_1722/validation/registry-consumer-smoke.stderr
+?? archive/pi_spinejit_rename_20261008_1722/validation/registry-new.json
+?? archive/pi_spinejit_rename_20261008_1722/validation/registry-old.json
+?? archive/pi_spinejit_rename_20261008_1722/validation/registry-version.json
+?? archive/pi_spinejit_rename_20261008_1722/validation/stage-list.json
+?? archive/pi_spinejit_rename_20261008_1722/validation/stage-list.stderr
+?? archive/sdk_review_branch_e2e_20260928_1232/blackboard/
+?? archive/sdk_review_branch_e2e_20260928_1232/completion/__pycache__/
+?? archive/sdk_review_branch_e2e_20260928_1232/composition/__pycache__/
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/baseline.patch
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/collaboration/audit-live-02.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/collaboration/audit-live-before-offer-floor.py
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/collaboration/audit-live.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/collaboration/audit-offer-diagnosis.json
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/collaboration/audit-offer-resolution.json
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/collaboration/finish-live-command.json
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/collaboration/finish-live.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/collaboration/finish-stage.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/collaboration/git-lock/README.md.before
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/collaboration/git-lock/before-02.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/collaboration/git-lock/before-state-correction/
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/collaboration/git-lock/before.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/collaboration/git-lock/diagnosis.json
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/collaboration/git-lock/finish.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/collaboration/git-lock/fixture-diagnosis.json
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/collaboration/git-lock/index.ts.before
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/collaboration/git-lock/offline-lockfix.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/collaboration/git-lock/offline-lockfix.test.mjs
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/collaboration/git-lock/offline.test.mjs.before
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/collaboration/git-lock/preparation-lockfix.json
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/collaboration/git-lock/ref-lock-02.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/collaboration/git-lock/runtime-manifest-lockfix.json
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/collaboration/git-lock/test-before-git225-fix.mjs
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/collaboration/git-lock/tree-tests-02.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/collaboration/git-lock/tree-tests-final.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/collaboration/harness-derivation.json
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/collaboration/initial-artifacts/
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/collaboration/live-finish-before/
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/collaboration/live-preparation-before/
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/collaboration/live-preparation.json
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/collaboration/live-preparation.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/collaboration/offline.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/collaboration/plan.md
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/collaboration/preparation-validation.json
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/collaboration/preparation.json
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/collaboration/provider-preparation.json
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/collaboration/report-review.md
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/collaboration/runtime-close.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/collaboration/runtime-manifest-live.json
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/collaboration/stage-before/
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/collaboration/stage-start-before/
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/collaboration/testbed-registration.json
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/collaboration/trace-audit.json
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/commit/before/
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/commit/command.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/commit/message.txt
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/commit/patch-context-whitespace.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/completion/archive-slice.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/completion/before/
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/completion/candidate-slice.json
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/completion/commit-receipt.json
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/completion/commit.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/completion/final-gate-before/
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/completion/finish-02.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/completion/finish.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/completion/first-draft/
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/completion/prepare-slice-02.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/completion/prepare-slice.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/composition/entry-fix/
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/composition/finish-live.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/composition/finish-stage.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/composition/interaction-live/
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/composition/live-finish-before/
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/composition/live-preparation.json
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/composition/mixed-offline.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/composition/preparation-2018.json
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/composition/preparation-2024.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/composition/preparation.json
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/composition/stage-before/
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/composition/structure-offline.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/composition/testbed-registration.json
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/core-provenance/artifacts-before/
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/core-provenance/core-source.before.json
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/core-provenance/diff-check.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/core-provenance/empty-node-probe.json
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/core-provenance/empty-node-probe.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/core-provenance/empty-node-probe.mjs
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/core-provenance/guard-current.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/core-provenance/guard-final.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/core-provenance/guard-mutated-reconstruction.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/core-provenance/guard-reconstruction.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/core-provenance/guard-validation.json
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/core-provenance/native-portable-tests-command.json
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/core-provenance/native-portable-tests.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/core-provenance/node-syntax.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/core-provenance/packaged-sdk-runtime.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/core-provenance/packaged-validation.json
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/core-provenance/reconstruct-patch.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/core-provenance/reconstructed-source/
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/core-provenance/shell-syntax.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/core-provenance/source-reconstruction.json
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/core-provenance/wasm-build-command.json
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/core-provenance/wasm-build.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/core-provenance/wasm-golden.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/integration/01.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/integration/02.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/integration/03.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/integration/04.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/integration/05.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/integration/06.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/integration/07.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/integration/candidate-files.json
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/integration/finish.py
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/integration/result.json
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/integration/run.py
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/lifecycle/interview-facts.json
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/lifecycle/memory-correction.json
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/lifecycle/offline-02/
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/lifecycle/offline-03/
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/lifecycle/offline-04/
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/lifecycle/offline/
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/lifecycle/preparation.json
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/lifecycle/runtime-manifest.json
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/lifecycle/stage-before/
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/lifecycle/testbed-index-before-finish.tsv
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/lifecycle/testbed-manifest-before-finish.yaml
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/lifecycle/testbed.json
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/lifecycle/trace-audit.json
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/memory/offline-02-command.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/memory/offline-02/
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/memory/offline-03-command.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/memory/offline-03/
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/memory/offline-before-envelope-fix.mjs
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/memory/offline-command.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/memory/offline-context-diagnostic.mjs
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/memory/offline/
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/memory/preparation.json
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/memory/read-contract/build.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/memory/read-contract/test.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/memory/stage-before/
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/memory/testbed-index-before-finish.tsv
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/memory/testbed-manifest-before-finish.yaml
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/memory/trace-audit.json
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/pi-fix/after-02.json
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/pi-fix/after.json
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/pi-fix/before-replay.json
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/pi-fix/before.json
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/pi-fix/build-after.json
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/pi-fix/build-after.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/pi-fix/build-before.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/pi-fix/plugin-tests.json
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/pi-fix/plugin-tests.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/pi-fix/rebuilt-wasm.json
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/pi-fix/regression-after-02.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/pi-fix/regression-after.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/pi-fix/regression-before-replay.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/pi-fix/regression-before.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/pi-fix/regression-rebuilt-wasm.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/pi-fix/result.json
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/pi-fix/validation-first-error.json
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/resources/finish-first-error.txt
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/resources/offline-02/
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/resources/offline-before-result-contract.mjs
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/resources/offline-command-02.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/resources/offline-command.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/resources/offline/
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/resources/plan.md
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/resources/preparation.json
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/resources/runtime-manifest.json
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/resources/stage-before/
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/resources/testbed-index-before-finish.tsv
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/resources/testbed-manifest-before-finish.yaml
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/resources/trace-audit.json
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/structure/archive-fix/README.md
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/structure/archive-fix/after.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/structure/archive-fix/before.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/structure/archive-fix/build.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/structure/archive-fix/commit.json
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/structure/archive-fix/commit.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/structure/archive-fix/integration-sdk/
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/structure/archive-fix/node-before.md
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/structure/archive-fix/pi-integration.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/structure/archive-fix/scopes.test-before.mjs
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/structure/archive-fix/scopes.ts
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/structure/archive-fix/tool-contracts.ts
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/structure/archive-fix/tree-before.yml
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/structure/archive-fix/tree-tests-02.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/structure/archive-fix/tree-tests.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/structure/offline-command.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/structure/offline/
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/structure/plan.md
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/structure/preparation-validation.json
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/structure/preparation.json
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/structure/runtime-manifest.json
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/structure/stage-before/
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/structure/testbed-index-before-finish.tsv
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/structure/testbed-manifest-before-finish.yaml
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/structure/trace-audit.json
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/tree-fix/build-after-02.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/tree-fix/build-after.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/tree-fix/build-before.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/tree-fix/fail-before-state.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/tree-fix/fail-before.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/tree-fix/pass-after.log
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/tree-fix/test-command.json
+?? archive/sdk_review_branch_e2e_20260928_1232/evidence/tree-fix/tests-after.log
+?? archive/sdk_review_branch_e2e_20260928_1232/runtime-collaboration-live/
+?? archive/sdk_review_branch_e2e_20260928_1232/runtime-collaboration-lockfix/
+?? archive/sdk_review_branch_e2e_20260928_1232/runtime-composition/
+?? archive/sdk_review_branch_e2e_20260928_1232/runtime-resources/
+?? archive/sdk_review_branch_e2e_20260928_1232/runtime-structure/
+?? archive/sdk_review_branch_e2e_20260928_1232/runtime/
+?? packages/plugin/src/pi/spawn-children.ts
+?? tasks/spawn_nonblocking_20261027_1600/
+?? temp/

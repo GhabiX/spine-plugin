@@ -28,22 +28,27 @@ import { Type } from "typebox";
 
 import type { HostContextEnvelope } from "../host-adapter.js";
 import {
-  executeSpawnBatch,
+  runSpawnChild,
+  toArrival,
+  type SpawnChildContext,
   type SpawnChildTerminal,
   type SpawnRecoveryPolicy,
 } from "../spawn.js";
 import { SpineToolInputError } from "../tools.js";
 import { watchParent } from "./parent-watch.js";
-import type { SpawnTask } from "@spinejit/spine-sdk";
+import type { SpawnArrival, SpawnTask, SpineProjection } from "@spinejit/spine-sdk";
 import {
   buildChildAssignment,
   buildChildContinuation,
   childSessionPath,
   CHILD_RETURN_TOOL,
   inspectChildSession,
+  readChildReturn,
+  readChildSessionIdentity,
   writeChildPrefixSession,
+  type ChildSessionScope,
 } from "./child-session.js";
-import { createPiSpineAdapter, createPiSpawnStagingStore } from "./index.js";
+import { createPiSpineAdapter } from "./index.js";
 import {
   buildCompactBarrier,
   decodeSpawnTasks,
@@ -54,6 +59,7 @@ import {
   PI_SPINE_TOOL_NAMES,
 } from "./lifecycle.js";
 import {
+  arrivalMessage,
   isPiHostSystemMessage,
   materializePiContext,
   projectPiSpineMessages,
@@ -69,14 +75,12 @@ import { buildPiReplayPlan, recoverPiSession, type PiBranchEntry } from "./recov
 import { SpineTreeDisplay } from "./tree-view.js";
 import { SPINE_TREE_VIEW_REQUEST } from "./tree-view-contract.js";
 import { queryPiSpineMode, type PiSpineMode } from "./session-mode.js";
+import { PiSpawnChildren, unarrivedBirths, type PiSpawnBirth } from "./spawn-children.js";
 import {
-  applySpawnTerminal,
-  createSpawnBatchView,
-  markSpawnTask,
+  renderSpawnAccepted,
   renderSpawnCall,
-  renderSpawnResult,
-  spawnModelText,
-  type SpawnBatchDetails,
+  spawnAcceptedDetails,
+  spawnAcceptedText,
 } from "./spawn-view.js";
 
 const CHILD_FLAG = "spine-child";
@@ -90,8 +94,8 @@ export interface PiExtensionRuntimeFactory {
 }
 
 export interface PiChildInvocationContext {
-  readonly batchId: string;
-  readonly ordinal: number;
+  /** The child's birth node id, dotted. */
+  readonly producer: string;
   readonly attempt: number;
   readonly mode: "initial" | "continue" | "retry";
   readonly sessionId: string;
@@ -147,6 +151,7 @@ export interface CreatePiSpinePluginOptions extends CreatePiExtensionOptions {
 interface ActivePiSession {
   lifecycle: PiSamplingLifecycle;
   runtime: NodeSpineRuntime;
+  children: PiSpawnChildren;
   latestContext: PublishedContext;
   materializeMessages(branch: readonly PiBranchEntry[]): PiAgentMessage[];
 }
@@ -218,7 +223,7 @@ function activatePiExtension(
     treeDisplay: new SpineTreeDisplay(),
     samplingPrefix: null,
   };
-  registerSpineTools(pi, slot, configToml, options.childInvocation);
+  registerSpineTools(pi, configToml);
   const modes = new Map<string, PiSpineMode>();
   pi.on("session_start", (_event, ctx) => {
     const sessionId = ctx.sessionManager.getSessionId();
@@ -228,7 +233,7 @@ function activatePiExtension(
     slot.mode = undefined;
     if (mode === "st") {
       // Inactive alone is insufficient: codemode/deferred tools remain callable.
-      registerSpineTools(pi, slot, configToml, options.childInvocation, "hidden");
+      registerSpineTools(pi, configToml, "hidden");
       registerChildReturnTool(pi, "hidden");
       slot.generation += 1;
       disposeCurrent(slot);
@@ -240,7 +245,7 @@ function activatePiExtension(
       if (claim.owner !== undefined && claim.owner !== "@spinejit/pi-spinejit") {
         throw new Error(`Pi compaction plugin conflict: @spinejit/pi-spinejit cannot load with ${claim.owner}. Enable only one compaction plugin.`);
       }
-      if (previousMode === "st") registerSpineTools(pi, slot, configToml, options.childInvocation);
+      if (previousMode === "st") registerSpineTools(pi, configToml);
     }
     slot.mode = mode;
   });
@@ -256,6 +261,7 @@ function activatePiExtension(
     options.onSamplingCommitPublication,
     options.onSamplingCommit,
     publishCommitted,
+    options.childInvocation,
   );
   pi.events.on(compactionOwnerEvent, (query) => {
     if (slot.mode === "sdk") (query as { owner?: string }).owner ??= "@spinejit/pi-spinejit";
@@ -264,13 +270,13 @@ function activatePiExtension(
 
 function registerSpineTools(
   pi: ExtensionAPI,
-  slot: MutableSessionSlot,
   configToml: string,
-  childInvocation?: PiChildInvocationFactory,
   exposure: "direct" | "hidden" = "direct",
 ): void {
   for (const tool of loadCanonicalSpineTools(configToml)) {
     if (tool.name === "spine_spawn") {
+      // The tool only acknowledges: the Spawn is staged at tool_call, and the
+      // children start after this turn commits their births (turn_end).
       pi.registerTool({
         name: tool.name,
         exposure,
@@ -278,74 +284,11 @@ function registerSpineTools(
         description: tool.description,
         parameters: tool.parameters,
         executionMode: "sequential",
-        async execute(toolCallId, params, signal, onUpdate, ctx) {
-          const session = await requireSession(slot);
+        async execute(_toolCallId, params) {
           const tasks = decodeSpawnTasks(params as unknown as Record<string, unknown>);
-          const view = createSpawnBatchView(tasks);
-          const publish = () => {
-            onUpdate?.(spawnToolUpdate(view));
-          };
-          publish();
-          const staging = createPiSpawnStagingStore({
-            async claimOwnership() {},
-            async appendCustomEntry(type, entry) {
-              pi.appendEntry(type, entry);
-            },
-            async materializeContext() {
-              return [];
-            },
-            async replaceContext() {},
-          });
-          const recovery = spawnRecoveryPolicy(ctx, pi);
-          const sessionIdentities = new Map<number, string>();
-          const results = await executeSpawnBatch({
-            batchId: toolCallId,
-            tasks,
-            ...(signal === undefined ? {} : { signal }),
-            staging,
-            ...(recovery === undefined
-              ? {}
-              : { recovery }),
-            executor: {
-              async execute(task, child) {
-                try {
-                  const terminal = await executePiChild(
-                    pi,
-                    ctx,
-                    slot,
-                    tasks,
-                    task,
-                    child,
-                    sessionIdentities,
-                    childInvocation,
-                  );
-                  applySpawnTerminal(view, child.ordinal, {
-                    ordinal: child.ordinal,
-                    outcome: terminal.outcome,
-                    memory_body: terminal.memoryBody,
-                    ...(terminal.diagnostic === undefined ? {} : { diagnostic: terminal.diagnostic }),
-                    ...(terminal.executionRef === undefined ? {} : { execution_ref: terminal.executionRef }),
-                  });
-                  publish();
-                  return terminal;
-                } catch (cause) {
-                  markSpawnTask(
-                    view,
-                    child.ordinal,
-                    child.signal.aborted ? "aborted" : "errored",
-                    spawnFailureDiagnostic(cause),
-                  );
-                  publish();
-                  throw cause;
-                }
-              },
-            },
-          });
-          await session.lifecycle.stageSpawn(toolCallId, tasks, results);
-          for (const result of results) applySpawnTerminal(view, result.ordinal, result);
           return {
-            content: [{ type: "text", text: spawnModelText(view) }],
-            details: { ...snapshotSpawnView(view), batchId: toolCallId, results },
+            content: [{ type: "text", text: spawnAcceptedText(tasks) }],
+            details: spawnAcceptedDetails(tasks),
           };
         },
         renderCall(args, theme) {
@@ -353,13 +296,8 @@ function registerSpineTools(
           const tasks = Array.isArray(record.tasks) ? record.tasks : [];
           return renderSpawnCall(tasks.length, theme);
         },
-        renderResult(result, { expanded }, theme) {
-          const details = spawnViewFromResult(result.details);
-          if (details === null) {
-            const text = result.content[0];
-            return linesComponent([text?.type === "text" ? text.text : "Spine Spawn"]);
-          }
-          return renderSpawnResult(details, expanded, theme);
+        renderResult(result, _options, theme) {
+          return renderSpawnAccepted(result.details, theme);
         },
       });
       continue;
@@ -401,18 +339,17 @@ function spawnRecoveryPolicy(
     return undefined;
   }
   return {
-    async choose(failures, signal) {
-      const ordinals = failures.map((failure) => failure.ordinal).join(", ");
-      const canContinue = failures.every((failure) => failure.continueable);
-      const choices = canContinue
-        ? ["Continue", "Retry", "Abandon"]
-        : ["Retry", "Abandon"];
-      const unavailable = failures
-        .filter((failure) => !failure.continueable)
-        .map((failure) => `${failure.ordinal}${failure.continueReason === undefined ? "" : ` (${failure.continueReason})`}`)
-        .join(", ");
+    async choose(failure, signal) {
+      const choices = [
+        ...(failure.continueable ? ["Continue"] : []),
+        ...(failure.retryable ? ["Retry"] : []),
+        "Abandon",
+      ];
+      const unavailable = failure.continueable || failure.continueReason === undefined
+        ? ""
+        : `; Continue unavailable: ${failure.continueReason}`;
       const choice = await ctx.ui.select(
-        `Spine Spawn failed child ordinal(s): ${ordinals}${unavailable.length === 0 ? "" : `; Continue unavailable for: ${unavailable}`}`,
+        `Spine Spawn child ${failure.producer.join(".")} (${failure.task.summary}) ${failure.outcome}: ${failure.diagnostic.slice(0, 240)}${unavailable}`,
         choices,
         { signal },
       );
@@ -491,6 +428,7 @@ function registerLifecycleHandlers(
   onSamplingCommitPublication?: CreatePiExtensionOptions["onSamplingCommitPublication"],
   onSamplingCommit?: CreatePiExtensionOptions["onSamplingCommit"],
   publishCommitted?: (record: PostCommitRecord) => Promise<void>,
+  childInvocation?: PiChildInvocationFactory,
 ): void {
   let childMode = false;
   let stopParentWatch: (() => void) | null = null;
@@ -518,8 +456,11 @@ function registerLifecycleHandlers(
       slot.compactionAbortCleanup?.();
       slot.compactionAbortCleanup = null;
       slot.samplingPrefix = null;
-      await beginSessionInitialization(slot, () => initializeSession(pi, ctx, runtimeFactory, onSessionReady));
-      if (slot.mode === "sdk") renderSpineTree(ctx, slot, await requireSession(slot));
+      await beginSessionInitialization(slot, () => initializeSession(pi, slot, ctx, runtimeFactory, onSessionReady));
+      if (slot.mode !== "sdk") return;
+      const session = await requireSession(slot);
+      await recoverChildren(pi, ctx, session, childInvocation);
+      renderSpineTree(ctx, slot, session);
     });
   });
   pi.on("session_tree", async (_event, ctx) => {
@@ -531,8 +472,11 @@ function registerLifecycleHandlers(
       slot.compactionAbortCleanup?.();
       slot.compactionAbortCleanup = null;
       slot.samplingPrefix = null;
-      await beginSessionInitialization(slot, () => initializeSession(pi, ctx, runtimeFactory, onSessionReady));
-      if (slot.mode === "sdk") renderSpineTree(ctx, slot, await requireSession(slot));
+      await beginSessionInitialization(slot, () => initializeSession(pi, slot, ctx, runtimeFactory, onSessionReady));
+      if (slot.mode !== "sdk") return;
+      const session = await requireSession(slot);
+      await recoverChildren(pi, ctx, session, childInvocation);
+      renderSpineTree(ctx, slot, session);
     });
   });
   pi.on("session_shutdown", (_event, ctx) => {
@@ -594,6 +538,16 @@ function registerLifecycleHandlers(
     if (slot.mode !== "sdk") return;
     return { messages: projectPiSpineMessages(event.messages as unknown as PiAgentMessage[]) as unknown as ContextEvent["messages"] };
   });
+  pi.on("agent_settled", async (event, ctx) => {
+    if (slot.mode !== "sdk" || slot.current === null) return;
+    if (event.aborted) {
+      slot.current.children.stop();
+      return;
+    }
+    // Without a UI (print mode, Spawn children) Pi exits once the agent settles.
+    // Hold it until a running child arrives; that arrival starts the next turn.
+    if (!ctx.hasUI) await slot.current.children.next();
+  });
   pi.on("before_agent_start", async (event, ctx) => {
     if (slot.mode !== "sdk") return;
     const session = await requireSession(slot);
@@ -606,7 +560,8 @@ function registerLifecycleHandlers(
   pi.on("tool_call", async (event, ctx) => {
     if (slot.mode !== "sdk") return;
     try {
-      const admission = controlToolAdmission(slot, event.toolName, event.input);
+      const admission = childReturnAdmission(slot, event.toolName) ??
+        controlToolAdmission(slot, event.toolName, event.input);
       if (admission !== undefined) return admission;
       await (await requireSession(slot)).lifecycle.registerToolCall(
         event.toolCallId,
@@ -643,6 +598,8 @@ function registerLifecycleHandlers(
         aborted: ctx.signal?.aborted === true,
       });
       if (commit === null || commit.type !== "committed") return;
+      boundary.stage = "launch_children";
+      launchChildren(pi, ctx, slot, await requireSession(slot), commit.projection, childInvocation);
       const commitInfo = {
         sessionId: ctx.sessionManager.getSessionId(),
         commit,
@@ -709,6 +666,12 @@ function registerLifecycleHandlers(
       session = await requireSession(slot);
     } catch (cause) {
       faultAndAbort(pi, slot, ctx, { hook: "session_before_compact", stage: "require_session" }, cause);
+      return { cancel: true };
+    }
+    // Compact requires every birth to have arrived; it runs again once they have.
+    const pending = unarrivedBirths(session.latestContext.projection);
+    if (pending.length > 0) {
+      if (ctx.hasUI) ctx.ui.notify(`Spine compaction waits for spawned children ${formatBirths(pending)}`, "warning");
       return { cancel: true };
     }
     let summaryResult: { summary: string; usage?: CompactionResult["usage"] };
@@ -955,6 +918,7 @@ function assignMissingPiSourceEntryIds(
 
 async function initializeSession(
   pi: ExtensionAPI,
+  slot: MutableSessionSlot,
   ctx: ExtensionContext,
   runtimeFactory: PiExtensionRuntimeFactory,
   onSessionReady?: CreatePiExtensionOptions["onSessionReady"],
@@ -1013,11 +977,12 @@ async function initializeSession(
       throw new Error("Pi Spine recovery did not install runtime context");
     }
     const initialContext: PublishedContext = latestContext as HostContextEnvelope<PiAgentMessage>;
-    const active = {
+    const active: ActivePiSession = {
       lifecycle: new PiSamplingLifecycle(recovered.adapter, recovered.bindings, recovered.source, {
         contextReady: true,
       }),
       runtime,
+      children: new PiSpawnChildren((arrival, wake) => deliverArrival(pi, slot, active, arrival, wake)),
       latestContext: initialContext,
       materializeMessages(branch: readonly PiBranchEntry[]) {
         return materializeFromBranch(initialContext, recovered.bindings, branch, runtime!.nodePrompt());
@@ -1055,56 +1020,39 @@ function childRuntimeFlags(ctx: ExtensionContext): string[] {
   return flags;
 }
 
+/** One attempt of one child: a fresh session from the birth prefix, or the same session continued. */
 async function executePiChild(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
-  slot: MutableSessionSlot,
-  tasks: readonly SpawnTask[],
+  scope: ChildSessionScope,
+  prefix: readonly unknown[] | null,
+  peers: readonly SpawnTask[],
   task: SpawnTask,
-  child: {
-    batchId: string;
-    ordinal: number;
-    signal: AbortSignal;
-    attempt: number;
-    mode: "initial" | "continue" | "retry";
-    guidance?: string;
-  },
-  sessionIdentities: Map<number, string>,
+  child: SpawnChildContext,
+  sessionIds: Map<number, string>,
   childInvocation?: PiChildInvocationFactory,
 ): Promise<SpawnChildTerminal> {
-  if (slot.samplingPrefix === null) {
-    if (process.env.SPINE_DEBUG === "1") console.error(JSON.stringify({ type: "spawn_child_missing_prefix", batchId: child.batchId, ordinal: child.ordinal }));
-    throw new Error("Pi Spawn child prefix is missing; parent sampling did not start");
-  }
-  const parentSessionFile = ctx.sessionManager.getSessionFile();
-  const destPath = childSessionPath({
-    batchId: child.batchId,
-    ordinal: child.ordinal,
-    attempt: child.attempt,
-    ...(parentSessionFile === undefined ? {} : { parentSessionFile }),
-  });
+  const producer = child.producer.join(".");
+  const destPath = childSessionPath(scope, child.producer, child.attempt);
   let sessionId: string;
   let prompt: string;
-  const assignment = buildChildAssignment(task, tasks);
+  const assignment = buildChildAssignment(task, peers);
   if (child.mode === "initial" || child.mode === "retry") {
+    if (prefix === null) throw new Error(`Pi Spawn child ${producer} has no birth context to start from`);
     sessionId = await writeChildPrefixSession({
       cwd: ctx.cwd,
       destPath,
-      entries: slot.samplingPrefix,
-      ...(parentSessionFile === undefined ? {} : { parentSession: parentSessionFile }),
+      entries: prefix,
+      ...(scope.parentSessionFile === undefined ? {} : { parentSession: scope.parentSessionFile }),
     });
-    sessionIdentities.set(child.ordinal, sessionId);
+    sessionIds.set(child.attempt, sessionId);
     prompt = assignment;
   } else {
     try {
-      const expected = sessionIdentities.get(child.ordinal);
-      if (expected === undefined) {
-        throw new Error(`Pi Spawn child session identity is missing for ordinal ${child.ordinal}`);
-      }
       const inspection = await inspectChildSession({
         cwd: ctx.cwd,
         destPath,
-        expectedId: expected,
+        expectedId: sessionIds.get(child.attempt) ?? await readChildSessionIdentity(destPath),
         assignment,
       });
       sessionId = inspection.id;
@@ -1115,9 +1063,8 @@ async function executePiChild(
       const diagnostic = clipSpawnDiagnostic(cause instanceof Error ? cause.message : String(cause));
       return {
         outcome: "errored",
-        memoryBody: diagnostic,
         diagnostic,
-        executionRef: `${child.batchId}:${child.ordinal}:attempt-${child.attempt}:missing-session`,
+        executionRef: `${producer}:attempt-${child.attempt}:missing-session`,
         recovery: { continueable: false, reason: diagnostic },
       };
     }
@@ -1125,8 +1072,7 @@ async function executePiChild(
   const invocation = childInvocation === undefined
     ? { ...piInvocation(), extensionPaths: [EXTENSION_MODULE_PATH] }
     : await childInvocation({
-      batchId: child.batchId,
-      ordinal: child.ordinal,
+      producer,
       attempt: child.attempt,
       mode: child.mode,
       sessionId,
@@ -1160,41 +1106,23 @@ async function executePiChild(
     ],
     { cwd: ctx.cwd, signal: child.signal },
   );
-  const executionRef = `${child.batchId}:${child.ordinal}:attempt-${child.attempt}:${sessionId}`;
+  const executionRef = `${producer}:attempt-${child.attempt}:${sessionId}`;
   const processDiagnostic = childProcessDiagnostic(result);
   let memory: string;
   try {
     memory = extractTypedChildMemory(result.stdout);
   } catch (cause) {
-    const diagnostic = clipSpawnDiagnostic(
-      `${cause instanceof Error ? cause.message : String(cause)}; ${processDiagnostic}`,
-    );
     return {
       outcome: result.killed ? "aborted" : "errored",
-      memoryBody: diagnostic,
-      diagnostic,
+      diagnostic: clipSpawnDiagnostic(`${cause instanceof Error ? cause.message : String(cause)}; ${processDiagnostic}`),
       executionRef,
     };
   }
-  if (result.killed) {
-    return {
-      outcome: "aborted",
-      memoryBody: memory,
-      diagnostic: processDiagnostic,
-      executionRef,
-    };
-  }
-  if (result.code !== 0) {
-    return {
-      outcome: "errored",
-      memoryBody: memory,
-      diagnostic: processDiagnostic,
-      executionRef,
-    };
-  }
+  // The typed return is the child's result; a later exit status does not undo it.
   return {
     outcome: "completed",
-    memoryBody: memory,
+    memory,
+    ...(result.code === 0 ? {} : { diagnostic: clipSpawnDiagnostic(processDiagnostic) }),
     executionRef,
   };
 }
@@ -1266,7 +1194,132 @@ function controlToolAdmission(
   if ((toolName === "spine_close" || toolName === "spine_next") && cursor.kind === "RootEpoch") {
     return { block: true, reason: "no open Spine node is available to close" };
   }
+  const pending = unarrivedBirths(projection, projection.cursor);
+  if (pending.length > 0) {
+    return {
+      block: true,
+      reason: `Spawned children ${formatBirths(pending)} have not arrived. Each result arrives as its own message; close this node after they have arrived.`,
+    };
+  }
   return undefined;
+}
+
+/** A child returns its memory only after its own spawned children have arrived. */
+function childReturnAdmission(
+  slot: MutableSessionSlot,
+  toolName: string,
+): { block: true; reason: string } | undefined {
+  if (toolName !== CHILD_RETURN_TOOL || slot.current === null) return undefined;
+  const pending = unarrivedBirths(slot.current.latestContext.projection);
+  if (pending.length === 0) return undefined;
+  return {
+    block: true,
+    reason: `Spawned children ${formatBirths(pending)} have not arrived. Each result arrives as its own message; return after they have arrived.`,
+  };
+}
+
+function formatBirths(births: readonly PiSpawnBirth[]): string {
+  return births.map((birth) => `${birth.producer.join(".")} (${birth.task.summary})`).join(", ");
+}
+
+function childScope(ctx: ExtensionContext): ChildSessionScope {
+  const parentSessionFile = ctx.sessionManager.getSessionFile();
+  return {
+    parentSessionId: ctx.sessionManager.getSessionId(),
+    ...(parentSessionFile === undefined ? {} : { parentSessionFile }),
+  };
+}
+
+/** Starts the children whose births this commit made; the sampling prefix is their fixed birth context. */
+function launchChildren(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  slot: MutableSessionSlot,
+  session: ActivePiSession,
+  projection: SpineProjection,
+  childInvocation?: PiChildInvocationFactory,
+): void {
+  const births = unarrivedBirths(projection);
+  if (births.length === 0) return;
+  const prefix = slot.samplingPrefix;
+  const scope = childScope(ctx);
+  const recovery = spawnRecoveryPolicy(ctx, pi);
+  session.children.launch(births, (birth, peers, signal) => {
+    const sessionIds = new Map<number, string>();
+    return runSpawnChild({
+      producer: birth.producer,
+      task: birth.task,
+      signal,
+      ...(recovery === undefined ? {} : { recovery }),
+      executor: {
+        execute: (task, child) =>
+          executePiChild(pi, ctx, scope, prefix, peers, task, child, sessionIds, childInvocation),
+      },
+    });
+  });
+}
+
+/**
+ * After a restart no child of this session is running. A child that already
+ * returned is delivered from its own session record without running again; one
+ * that did not return awaits a recovery decision, and without a UI is abandoned.
+ */
+async function recoverChildren(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  session: ActivePiSession,
+  childInvocation?: PiChildInvocationFactory,
+): Promise<void> {
+  const births = unarrivedBirths(session.latestContext.projection);
+  if (births.length === 0) return;
+  const scope = childScope(ctx);
+  const recovery = spawnRecoveryPolicy(ctx, pi);
+  for (const birth of births) {
+    const returned = await readChildReturn(scope, birth.producer);
+    if (returned.memory !== null) {
+      session.children.redeliver(toArrival(birth.producer, { outcome: "completed", memory: returned.memory }));
+      continue;
+    }
+    const latest = returned.latest;
+    const sessionIds = new Map<number, string>();
+    session.children.start(birth, (signal) => runSpawnChild({
+      producer: birth.producer,
+      task: birth.task,
+      signal,
+      ...(recovery === undefined ? {} : { recovery }),
+      executor: {
+        async execute(task, child) {
+          if (child.mode === "initial") {
+            return {
+              outcome: "aborted",
+              diagnostic: "the parent session restarted before this child returned",
+              recovery: latest === null
+                ? { continueable: false, retryable: false, reason: "no child session was saved" }
+                : { continueable: true, retryable: false },
+            };
+          }
+          return executePiChild(pi, ctx, scope, null, [], task, {
+            ...child,
+            attempt: (latest?.attempt ?? 0) + child.attempt,
+          }, sessionIds, childInvocation);
+        },
+      },
+    }), false);
+  }
+}
+
+/** Admits each producer at most once: an arrival goes only to the session that bore it, while unarrived. */
+function deliverArrival(
+  pi: ExtensionAPI,
+  slot: MutableSessionSlot,
+  session: ActivePiSession,
+  arrival: SpawnArrival,
+  wake: boolean,
+): void {
+  if (slot.current !== session) return;
+  const key = arrival.producer.join(".");
+  if (!unarrivedBirths(session.latestContext.projection).some((birth) => birth.producer.join(".") === key)) return;
+  pi.sendMessage(arrivalMessage(arrival), { deliverAs: "steer", triggerTurn: wake });
 }
 
 function assertCurrentSession(slot: MutableSessionSlot, session: ActivePiSession): void {
@@ -1423,6 +1476,7 @@ function abortError(message: string): Error {
 }
 
 function disposeCurrent(slot: MutableSessionSlot): void {
+  slot.current?.children.dispose();
   slot.current?.runtime.dispose();
   slot.current = null;
 }
@@ -1441,33 +1495,6 @@ function piInvocation(): { command: string; args: string[] } {
 
 function renderSpineTree(ctx: ExtensionContext, slot: MutableSessionSlot, session: ActivePiSession): void {
   slot.treeDisplay.publish(ctx, slot.generation, session.latestContext.projection);
-}
-
-function spawnToolUpdate(view: SpawnBatchDetails) {
-  return {
-    content: [{ type: "text" as const, text: spawnModelText(view) }],
-    details: snapshotSpawnView(view),
-  };
-}
-
-function snapshotSpawnView(view: SpawnBatchDetails): SpawnBatchDetails {
-  return {
-    schema: "spine.spawn.view.v1",
-    tasks: view.tasks.map((task) => ({ ...task })),
-  };
-}
-
-function spawnViewFromResult(details: unknown): SpawnBatchDetails | null {
-  if (!isRecord(details) || details.schema !== "spine.spawn.view.v1" || !Array.isArray(details.tasks)) {
-    return null;
-  }
-  return details as unknown as SpawnBatchDetails;
-}
-
-function spawnFailureDiagnostic(cause: unknown): string {
-  if (cause instanceof Error && cause.message.trim() !== "") return cause.message.slice(0, 240);
-  const text = String(cause).trim();
-  return text === "" ? "spawn child failed" : text.slice(0, 240);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

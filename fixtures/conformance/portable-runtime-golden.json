@@ -1,13 +1,13 @@
 {
   "init": {
-    "schema": "spine-sdk/v2",
+    "schema": "spine-sdk/v3",
     "thread": "portable-trace",
     "epoch": 0,
     "features": ["jit"]
   },
   "requests": [
     {
-      "schema": "spine-sdk/v2",
+      "schema": "spine-sdk/v3",
       "request": {
         "type": "observe_sources",
         "characters": [
@@ -16,14 +16,14 @@
       }
     },
     {
-      "schema": "spine-sdk/v2",
+      "schema": "spine-sdk/v3",
       "request": {
         "type": "begin_sampling",
         "prompt_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
       }
     },
     {
-      "schema": "spine-sdk/v2",
+      "schema": "spine-sdk/v3",
       "request": {
         "type": "observe_sources",
         "characters": [
@@ -32,7 +32,7 @@
       }
     },
     {
-      "schema": "spine-sdk/v2",
+      "schema": "spine-sdk/v3",
       "request": {
         "type": "prepare_finish",
         "terminal": "completed",

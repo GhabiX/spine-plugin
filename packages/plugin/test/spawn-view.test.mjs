@@ -2,12 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  applySpawnTerminal,
-  createSpawnBatchView,
-  markSpawnTask,
+  renderSpawnAccepted,
   renderSpawnCall,
-  renderSpawnResult,
-  spawnFallbackText,
+  spawnAcceptedDetails,
+  spawnAcceptedText,
 } from "../dist/pi/spawn-view.js";
 
 const theme = {
@@ -19,58 +17,28 @@ const theme = {
   },
 };
 
-test("spawn view assigns Codex activity words and live/settled markers", () => {
-  const view = createSpawnBatchView([
-    { summary: "inspect auth", prompt: "auth" },
-    { summary: "inspect models", prompt: "models" },
-    { summary: "inspect providers", prompt: "providers" },
-  ]);
-  assert.deepEqual(
-    view.tasks.map((task) => task.activityWord),
-    ["Germinating", "Budding", "Sprouting"],
-  );
-  assert.equal(view.tasks.every((task) => task.status === "running"), true);
-  assert.match(spawnFallbackText(view), /  ├ ◐ Germinating inspect auth/);
+const tasks = [
+  { summary: "inspect auth", prompt: "auth" },
+  { summary: "inspect models", prompt: "models" },
+  { summary: "inspect providers", prompt: "providers" },
+];
 
-  applySpawnTerminal(view, 1, {
-    ordinal: 1,
-    outcome: "completed",
-    memory_body: "models done",
-  });
-  markSpawnTask(view, 2, "errored", "child failed");
-  const text = spawnFallbackText(view);
-  assert.match(text, /├ ◐ Germinating inspect auth/);
-  assert.match(text, /├ ✓ Budding inspect models/);
-  assert.match(text, /└ × Sprouting inspect providers/);
-  assert.equal(text.includes("⏳"), false);
-  assert.equal(text.includes("Spine Spawn"), false);
-  assert.equal(text.includes("settled"), false);
+test("spawn acceptance lists each task with its activity word", () => {
+  const details = spawnAcceptedDetails(tasks);
+  assert.deepEqual(details.tasks.map((task) => task.activityWord), ["Germinating", "Budding", "Sprouting"]);
+  assert.deepEqual(renderSpawnCall(3, theme).render(80), ["spine_spawn  3 tasks"]);
+  // The brand color is ANSI regardless of theme.
+  assert.deepEqual(renderSpawnAccepted(details, theme).render(80).map((line) => line.replace(/\x1b\[[0-9;]*m/g, "")), [
+    "  ├ ◐ Germinating inspect auth",
+    "  ├ ◐ Budding inspect models",
+    "  └ ◐ Sprouting inspect providers",
+  ]);
+  assert.deepEqual(renderSpawnAccepted({ unrelated: true }, theme).render(80), ["Spine Spawn"]);
 });
 
-test("spawn renderers keep the SpineCodex marker language", () => {
-  const view = createSpawnBatchView([
-    { summary: "inspect auth", prompt: "auth" },
-    { summary: "inspect models", prompt: "models" },
-  ]);
-  applySpawnTerminal(view, 0, {
-    ordinal: 0,
-    outcome: "completed",
-    memory_body: "auth memory\nsecond line\nthird",
-  });
-  const header = renderSpawnCall(2, theme).render(80);
-  assert.deepEqual(header, ["spine_spawn  2 tasks"]);
-
-  const collapsed = renderSpawnResult(view, false, theme).render(80);
-  assert.equal(collapsed.some((line) => line.includes("Spine Spawn")), false);
-  assert.match(collapsed[0], /✓/);
-  assert.match(collapsed[0], /Germinating/);
-  assert.match(collapsed[0], /inspect auth/);
-  assert.match(collapsed[1], /◐/);
-  assert.match(collapsed[1], /Budding/);
-  assert.match(collapsed[1], /inspect models/);
-  assert.equal(collapsed.some((line) => line.includes("auth memory")), false);
-
-  const expanded = renderSpawnResult(view, true, theme).render(80);
-  assert.equal(expanded.some((line) => line.includes("auth memory")), true);
-  assert.equal(expanded.some((line) => /⏳|✔|❌/.test(line)), false);
+test("the model is told results arrive later and the node waits for them", () => {
+  const text = spawnAcceptedText(tasks);
+  assert.match(text, /accepted 3 tasks/);
+  assert.match(text, /arrives later as its own message/);
+  assert.match(text, /cannot close until all of them have arrived/);
 });

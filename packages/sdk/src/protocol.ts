@@ -1,4 +1,4 @@
-export const SPINE_SDK_SCHEMA = "spine-sdk/v2" as const;
+export const SPINE_SDK_SCHEMA = "spine-sdk/v3" as const;
 export const SPINE_SOURCE_SNAPSHOT_SCHEMA = "spine.source.snapshot.v1" as const;
 
 export type SpineSdkSchema = typeof SPINE_SDK_SCHEMA;
@@ -22,12 +22,14 @@ export type SourceRole =
   | "user"
   | "contextual_user"
   | "assistant"
+  | "reply"
   | "developer"
   | "system";
 export type MessageRole =
   | "User"
   | "ContextualUser"
   | "Assistant"
+  | "Reply"
   | "Developer"
   | "System";
 
@@ -58,10 +60,13 @@ export interface SpawnTask {
   prompt: string;
 }
 
-export interface SpawnResult {
-  ordinal: SafeInteger;
-  outcome: "completed" | "errored" | "aborted";
-  memory_body: string;
+export type SpawnOutcome = "completed" | "errored" | "aborted";
+
+/** A spawned child's final result. Completed carries memory; others carry a diagnostic. */
+export interface SpawnArrival {
+  producer: SafeInteger[];
+  outcome: SpawnOutcome;
+  memory?: string | null;
   diagnostic?: string | null;
   execution_ref?: string | null;
 }
@@ -82,13 +87,23 @@ export type MemorySlot =
       };
     }
   | {
-      SpawnEvidence: {
+      Birth: {
         owner_node: SafeInteger[];
         source: RawSpan;
         task: SpawnTask;
-        outcome: "completed" | "errored" | "aborted";
-        diagnostic: string | null;
-        execution_ref: string | null;
+      };
+    }
+  | {
+      Arrival: {
+        owner_node: SafeInteger[];
+        boundary: SafeInteger;
+        arrival: SpawnArrival;
+      };
+    }
+  | {
+      Reply: {
+        owner_node: SafeInteger[];
+        message: Message;
       };
     };
 
@@ -124,17 +139,14 @@ export type SourceCharacter =
       content: string;
     }
   | { type: "opaque"; boundary: SafeInteger }
-  | { type: "synthetic"; boundary: SafeInteger; item: ContextItem };
+  | { type: "synthetic"; boundary: SafeInteger; item: ContextItem }
+  | { type: "arrival"; boundary: SafeInteger; arrival: SpawnArrival };
 
 export type SpineOperation =
   | { type: "open"; summary: string }
   | { type: "close"; memory: string }
   | { type: "next"; closed_memory: string; next_summary: string }
-  | {
-      type: "spawn";
-      tasks: SpawnTask[];
-      terminal_results: SpawnResult[];
-    };
+  | { type: "spawn"; tasks: SpawnTask[] };
 
 export interface SamplingStarted {
   schema: "spine.sampling.started";
@@ -213,10 +225,12 @@ export interface NodeSnapshot {
   id: SafeInteger[];
   parent: SafeInteger[] | null;
   children: SafeInteger[][];
-  kind: "RootEpoch" | "Task";
+  kind: "RootEpoch" | "Task" | "Spawn";
   status: "Live" | "Opened" | "Closed" | "Compacted";
   summary: string | null;
   memory: MemorySlot[] | null;
+  /** For a Spawn node, the outcome of its admitted arrival; null until it arrives. */
+  spawn_outcome: SpawnOutcome | null;
   start: SafeInteger;
   end: SafeInteger | null;
 }

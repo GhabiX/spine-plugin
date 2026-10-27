@@ -12,6 +12,7 @@ import {
   buildChildContinuation,
   childSessionPath,
   inspectChildSession,
+  readChildReturn,
   readChildSessionIdentity,
   writeChildPrefixSession,
 } from "../dist/pi/child-session.js";
@@ -64,23 +65,47 @@ test("written prefix session is a Pi-openable fork of the parent branch", async 
   assert.equal(branch[0].message.content, "parent prefix TOKEN");
 });
 
-test("child session path stays next to the parent session file when one exists", () => {
+test("child session path is keyed by parent session and birth id, next to the parent file", () => {
   assert.equal(
-    childSessionPath({
-      batchId: "spawn-1",
-      ordinal: 0,
-      parentSessionFile: "/tmp/sessions/parent.jsonl",
-    }),
-    "/tmp/sessions/spine-spawn/spawn-1/0.jsonl",
+    childSessionPath({ parentSessionId: "parent-1", parentSessionFile: "/tmp/sessions/parent.jsonl" }, [0, 2, 1]),
+    "/tmp/sessions/spine-spawn/parent-1/0.2.1.jsonl",
   );
   assert.match(
-    childSessionPath({ batchId: "spawn/1", ordinal: 2 }),
-    /pi-spine-spawn\/spawn_1\/2\.jsonl$/,
+    childSessionPath({ parentSessionId: "parent/1" }, [0, 3]),
+    /pi-spine-spawn\/parent_1\/0\.3\.jsonl$/,
   );
   assert.match(
-    childSessionPath({ batchId: "spawn-1", ordinal: 2, attempt: 1 }),
-    /pi-spine-spawn\/spawn-1\/2\.attempt-1\.jsonl$/,
+    childSessionPath({ parentSessionId: "parent-1" }, [0, 3], 1),
+    /pi-spine-spawn\/parent-1\/0\.3\.attempt-1\.jsonl$/,
   );
+});
+
+test("a child's typed return is read back from its own session across attempts", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-spine-return-"));
+  const scope = { parentSessionId: "parent", parentSessionFile: join(root, "parent.jsonl") };
+  assert.deepEqual(await readChildReturn(scope, [0, 1]), { memory: null, latest: null });
+
+  const first = childSessionPath(scope, [0, 1]);
+  await writeChildPrefixSession({ cwd: "/tmp/project", destPath: first, entries: [] });
+  assert.deepEqual(await readChildReturn(scope, [0, 1]), { memory: null, latest: { path: first, attempt: 0 } });
+
+  const retry = childSessionPath(scope, [0, 1], 1);
+  await writeChildPrefixSession({ cwd: "/tmp/project", destPath: retry, entries: [] });
+  const session = SessionManager.open(retry, undefined, "/tmp/project");
+  session.appendMessage({ role: "user", content: "assignment", timestamp: 1 });
+  session.appendMessage({
+    role: "assistant",
+    content: [{ type: "toolCall", id: "r", name: CHILD_RETURN_TOOL, arguments: { memory: "child result" } }],
+    api: "test",
+    provider: "test",
+    model: "test",
+    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+    stopReason: "toolUse",
+    timestamp: 2,
+  });
+  assert.deepEqual(await readChildReturn(scope, [0, 1]), { memory: "child result", latest: { path: retry, attempt: 1 } });
+  // A sibling whose id extends this one is a different child.
+  assert.deepEqual(await readChildReturn(scope, [0]), { memory: null, latest: null });
 });
 
 test("child continuation preserves the active session and optional guidance", () => {
@@ -126,31 +151,6 @@ test("child session inspection detects durable assignment context", async () => 
       assignment,
     }),
     /identity changed/,
-  );
-});
-
-test("child session inspection rejects uncommitted nested Spawn staging", async () => {
-  const dest = join(await mkdtemp(join(tmpdir(), "pi-spine-staged-")), "child.jsonl");
-  const id = await writeChildPrefixSession({
-    cwd: "/tmp/project",
-    destPath: dest,
-    entries: [],
-  });
-  const session = SessionManager.open(dest, undefined, "/tmp/project");
-  session.appendCustomEntry("spine.spawn-terminal.v1", {
-    schema: "spine-plugin/pi/v1",
-    batchId: "nested-batch",
-    result: { ordinal: 0, outcome: "completed", memory_body: "nested memory" },
-  });
-
-  await assert.rejects(
-    inspectChildSession({
-      cwd: "/tmp/project",
-      destPath: dest,
-      expectedId: id,
-      assignment: "Assignment:\nreturn TOKEN_A",
-    }),
-    /uncommitted Spine Spawn staging/,
   );
 });
 

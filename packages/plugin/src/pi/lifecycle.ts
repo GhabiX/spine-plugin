@@ -1,7 +1,6 @@
 import type {
   CompactBarrier,
   SourceSnapshot,
-  SpawnResult,
   SpawnTask,
   SpineOperation,
   Terminal,
@@ -9,7 +8,6 @@ import type {
 
 import type { SpineHostAdapter } from "../host-adapter.js";
 import type { FinishSamplingResult } from "../controller.js";
-import { validateSpawnResults } from "../spawn.js";
 import { isPiHostSystemMessage, PiSourceBindings, sourceObservation, type PiAgentMessage } from "./messages.js";
 import {
   decodeSpineSpawnTasks,
@@ -210,12 +208,7 @@ export class PiSamplingLifecycle {
         cause: this.fault,
       });
     }
-    const operation = toolName === "spine_spawn"
-      ? null
-      : operationFromPiToolCall(toolName, input);
-    if (toolName === "spine_spawn") {
-      decodeSpawnTasks(input);
-    }
+    const operation = operationFromPiToolCall(toolName, input);
     const toolClass = spineToolClass(toolName);
     if (this.#samplingClass !== null && this.#samplingClass !== toolClass) {
       throw new PiSpineToolMixError();
@@ -228,31 +221,9 @@ export class PiSamplingLifecycle {
       }
       await this.#adapter.registerExecution(toolCallId);
       this.#executions.add(toolCallId);
-      if (operation !== null) {
-        await this.#adapter.stageExecution(
-          toolCallId,
-          toolCallId,
-          operation,
-        );
-      }
+      await this.#adapter.stageExecution(toolCallId, toolCallId, operation);
     });
     return true;
-  }
-
-  async stageSpawn(
-    toolCallId: string,
-    tasks: SpawnTask[],
-    terminalResults: SpawnResult[],
-  ): Promise<void> {
-    await this.#guard(async () => {
-      this.#assertTrackedExecution(toolCallId);
-      validateSpawnResults(tasks, terminalResults);
-      await this.#adapter.stageExecution(toolCallId, toolCallId, {
-        type: "spawn",
-        tasks,
-        terminal_results: terminalResults,
-      });
-    });
   }
 
   async finishToolCall(toolCallId: string, succeeded: boolean): Promise<boolean> {
@@ -318,12 +289,6 @@ export class PiSamplingLifecycle {
     }
   }
 
-  #assertTrackedExecution(toolCallId: string): void {
-    this.#assertSamplingActive();
-    if (!this.#executions.has(toolCallId)) {
-      throw new PiSamplingLifecycleError(`unknown Pi Spine tool call ${toolCallId}`);
-    }
-  }
 }
 
 export function buildCompactBarrier(
@@ -359,7 +324,7 @@ export function buildCompactBarrier(
 }
 
 export function operationFromPiToolCall(
-  toolName: Exclude<PiSpineToolName, "spine_spawn">,
+  toolName: PiSpineToolName,
   input: Record<string, unknown>,
 ): SpineOperation {
   try {

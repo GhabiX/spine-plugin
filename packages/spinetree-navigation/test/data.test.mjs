@@ -47,10 +47,19 @@ async function fixture(epoch = 0) {
     const entry = add({ type: 'compaction', summary: 'Compacted history', firstKeptEntryId: entries[0].id, tokensBefore: 20, fromHook: true });
     return entry;
   }
-  return { runtime, entries, inputs, step, compact, async fork() { thread = 'fork'; await runtime.client.execute({ type: 'continue_namespace', thread }); }, data() { return createNavigationData({ sessionId: thread, generation: 1, nodes: projection.nodes, cursor: projection.cursor }); }, get projection() { return projection; } };
+  // A spawned child's result enters as an external input before the next sampling.
+  async function arrive(summary, outcome = 'completed') {
+    const birth = projection.nodes.find(node => node.kind === 'Spawn' && node.summary === summary);
+    const arrival = { producer: birth.id, outcome, ...(outcome === 'completed' ? { memory: `${summary} returned` } : { diagnostic: 'test error' }) };
+    const character = { type: 'arrival', boundary: boundary++, arrival };
+    inputs.push({ type: 'source', character });
+    add({ type: 'custom_message', customType: 'spine.arrival', content: summary, display: true, details: { schema: 'spine.pi.arrival/v1', arrival } });
+    await runtime.client.execute({ type: 'observe_sources', characters: [character] });
+  }
+  return { runtime, entries, inputs, step, compact, arrive, async fork() { thread = 'fork'; await runtime.client.execute({ type: 'continue_namespace', thread }); }, data() { return createNavigationData({ sessionId: thread, generation: 1, nodes: projection.nodes, cursor: projection.cursor }); }, get projection() { return projection; } };
 }
 
-const spawn = (summary, outcome = 'completed') => ({ type: 'spawn', tasks: [summary, `${summary}-peer`].map(summary => ({ summary, prompt: `${summary} prompt` })), terminal_results: [0, 1].map(ordinal => ({ ordinal, outcome, diagnostic: outcome === 'completed' ? null : 'test error', memory_body: `${summary} returned`, execution_ref: 'child-session' })) });
+const spawn = (summary) => ({ type: 'spawn', tasks: [summary, `${summary}-peer`].map(summary => ({ summary, prompt: `${summary} prompt` })) });
 
 test('real runtime Open/Next/Spawn/compact map to navigable nodes and memory', async () => {
   const f = await fixture(17);
@@ -58,12 +67,20 @@ test('real runtime Open/Next/Spawn/compact map to navigable nodes and memory', a
     await f.step([{ type: 'open', summary: 'research' }]);
     await f.step([{ type: 'next', next_summary: 'implement', closed_memory: 'Research findings' }]);
     await f.step([spawn('a')]);
-    await f.step([spawn('b', 'errored')]);
+    await f.arrive('a');
+    await f.arrive('a-peer');
+    await f.step([spawn('b')]);
+    assert.equal(f.data().nodes.find(n => n.summary === 'b').spawnOutcome, null);
+    assert.match(f.data().memoryText(f.data().nodes.find(n => n.summary === 'b').id), /running/);
+    await f.arrive('b', 'errored');
+    await f.arrive('b-peer');
+    await f.step([]);
     await f.compact();
     await f.fork();
     await f.step([{ type: 'open', summary: 'after compact' }]);
     const data = f.data();
-    assert.deepEqual(data.nodes.filter(n => n.kind === 'Task').map(n => n.summary), ['research', 'implement', 'a', 'a-peer', 'b', 'b-peer', 'after compact']);
+    assert.deepEqual(data.nodes.filter(n => n.kind === 'Task').map(n => n.summary), ['research', 'implement', 'after compact']);
+    assert.deepEqual(data.nodes.filter(n => n.kind === 'Spawn').map(n => [n.summary, n.spawnOutcome]), [['a', 'completed'], ['a-peer', 'completed'], ['b', 'errored'], ['b-peer', 'completed']]);
     assert.deepEqual(data.memorySections('1.1'), ['Research findings']);
     assert.equal(data.memoryText('1.1'), 'Research findings');
     const b = data.nodes.find(n => n.summary === 'b');

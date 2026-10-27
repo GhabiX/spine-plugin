@@ -6,7 +6,8 @@ import {
   materializePiContext,
   PI_SPINE_MEMORY_MESSAGE_TYPE,
   PI_SPINE_NODE_MESSAGE_TYPE,
-  PI_SPINE_SPAWN_EVIDENCE_MESSAGE_TYPE,
+  PI_SPINE_BIRTH_MESSAGE_TYPE,
+  arrivalMessage,
   projectPiSpineMessages,
   PiContextMaterializationError,
   PiSourceBindings,
@@ -45,6 +46,28 @@ test("Pi source observations preserve native messages outside the semantic core"
     isError: false,
     timestamp: 43,
   }, 8).character, { type: "opaque", boundary: 8 });
+});
+
+test("arrivals and replies become typed source characters", () => {
+  const arrival = { producer: [0, 1, 2], outcome: "completed", memory: "child memory" };
+  const message = arrivalMessage(arrival);
+  assert.equal(message.content, '<spine_arrival node_id="0.1.2" outcome="completed">\nchild memory\n</spine_arrival>');
+  assert.deepEqual(sourceObservation(message, 5).character, { type: "arrival", boundary: 5, arrival });
+  const failed = arrivalMessage({ producer: [0, 1], outcome: "aborted", diagnostic: "cancelled" });
+  assert.match(failed.content, /outcome="aborted">\ncancelled\n/);
+  assert.throws(
+    () => sourceObservation({ ...message, details: { schema: "other" } }, 5),
+    PiContextMaterializationError,
+  );
+
+  const assistant = (content, stopReason) => ({ role: "assistant", content, stopReason, timestamp: 1 });
+  const role = (message) => sourceObservation(message, 0).character.role;
+  assert.equal(role(assistant([{ type: "thinking", thinking: "hm" }, { type: "text", text: "answer" }], "stop")), "reply");
+  assert.equal(sourceObservation(assistant([{ type: "thinking", thinking: "hm" }, { type: "text", text: "answer" }], "stop"), 0).character.content, "answer");
+  assert.equal(role(assistant([{ type: "text", text: "calling" }, { type: "toolCall", id: "c", name: "read", arguments: {} }], "toolUse")), "assistant");
+  assert.equal(role(assistant([{ type: "text", text: "cut off" }], "length")), "assistant");
+  assert.equal(role(assistant([{ type: "thinking", thinking: "only thought" }], "stop")), "assistant");
+  assert.equal(role({ role: "custom", customType: "note", content: "ctx", display: false, timestamp: 1 }), "contextual_user");
 });
 
 test("Pi context materialization resolves exact source identity and user anchors", () => {
@@ -93,14 +116,15 @@ test("Pi renders only the canonical Spine-owned projection forms", () => {
         projection({ MemorySlot: { Summary: {
           owner_node: [0, 2], source: { start: 1, end: 2 }, body: "memory",
         } } }, 1),
-        projection({ MemorySlot: { SpawnEvidence: {
-          owner_node: [0],
+        projection({ MemorySlot: { Birth: {
+          owner_node: [0, 3],
           source: { start: 3, end: 3 },
-          task: { summary: "task", prompt: "prompt" },
-          outcome: "completed",
-          diagnostic: null,
-          execution_ref: "child-1",
+          task: { summary: "task <a>", prompt: "prompt" },
         } } }, 2),
+        projection({ MemorySlot: { Reply: {
+          owner_node: [0, 2],
+          message: { boundary: 4, role: "Reply", content: "here is the answer" },
+        } } }, 3),
       ],
       plan_digest: "plan-1",
     },
@@ -121,9 +145,11 @@ test("Pi renders only the canonical Spine-owned projection forms", () => {
   assert.equal(messages[1].content,
     '<spine_memory node_id="0.2">\nmemory\n</spine_memory>');
   assert.equal(messages[2].role, "custom");
-  assert.equal(messages[2].customType, PI_SPINE_SPAWN_EVIDENCE_MESSAGE_TYPE);
-  assert.equal(messages[2].details.kind, "spawn_evidence");
-  assert.match(messages[2].content, /^<spine_spawn_evidence node_id="0">/);
+  assert.equal(messages[2].customType, PI_SPINE_BIRTH_MESSAGE_TYPE);
+  assert.equal(messages[2].details.kind, "birth");
+  assert.equal(messages[2].content, '<spine_spawn node_id="0.3" summary="task &lt;a&gt;">\nprompt\n</spine_spawn>');
+  assert.equal(messages[3].role, "assistant");
+  assert.deepEqual(messages[3].content, [{ type: "text", text: "here is the answer" }]);
 
   const providerMessages = projectPiSpineMessages(messages);
   assert.equal(providerMessages[0].role, "system");
@@ -131,10 +157,10 @@ test("Pi renders only the canonical Spine-owned projection forms", () => {
   assert.equal(providerMessages[1].role, "custom");
   assert.equal(providerMessages[1].customType, PI_SPINE_MEMORY_MESSAGE_TYPE);
   assert.equal(providerMessages[2].role, "custom");
-  assert.equal(providerMessages[2].customType, PI_SPINE_SPAWN_EVIDENCE_MESSAGE_TYPE);
+  assert.equal(providerMessages[2].customType, PI_SPINE_BIRTH_MESSAGE_TYPE);
 
   const reprojected = projectPiSpineMessages(providerMessages);
-  assert.deepEqual(reprojected.map((message) => message.role), ["system", "custom", "custom"]);
+  assert.deepEqual(reprojected.map((message) => message.role), ["system", "custom", "custom", "assistant"]);
   assert.equal(reprojected[0].content, providerMessages[0].content);
 });
 

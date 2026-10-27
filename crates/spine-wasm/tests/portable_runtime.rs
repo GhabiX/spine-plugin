@@ -120,7 +120,7 @@ fn json_dispatch_rejects_wrong_schema_without_mutating_runtime() {
     assert_eq!(response["error"]["code"], "unsupported_schema");
 
     let valid: Value = serde_json::from_str(
-        &runtime.dispatch_json(r#"{"schema":"spine-sdk/v2","request":{"type":"preview"}}"#),
+        &runtime.dispatch_json(r#"{"schema":"spine-sdk/v3","request":{"type":"preview"}}"#),
     )
     .expect("response json");
     assert_eq!(valid["ok"], true);
@@ -512,4 +512,116 @@ fn source_snapshot_and_namespace_continuation_expose_exact_bindings() {
         }
         other => panic!("unexpected result: {other:?}"),
     }
+}
+
+fn commit_sampling(runtime: &mut PortableRuntime, executions: Vec<Operation>, output: SourceCharacter) -> Value {
+    runtime
+        .execute(Command::BeginSampling {
+            prompt_digest: None,
+        })
+        .expect("begin");
+    for (index, operation) in executions.into_iter().enumerate() {
+        let key = format!("call-{index}");
+        runtime
+            .execute(Command::RegisterExecution { key: key.clone() })
+            .expect("register");
+        runtime
+            .execute(Command::StageExecution {
+                key: key.clone(),
+                execution_ref: key.clone(),
+                operation,
+            })
+            .expect("stage");
+        runtime
+            .execute(Command::FinishExecution {
+                key,
+                succeeded: true,
+            })
+            .expect("finish execution");
+    }
+    runtime
+        .execute(Command::ObserveSources {
+            characters: vec![output],
+        })
+        .expect("observe output");
+    let transaction_id = match runtime
+        .execute(Command::PrepareFinish {
+            terminal: Terminal::Completed,
+            input_tokens: None,
+        })
+        .expect("prepare")
+    {
+        CommandResult::FinishPrepared { transaction_id, .. } => transaction_id,
+        other => panic!("unexpected result: {other:?}"),
+    };
+    match runtime
+        .execute(Command::InstallPrepared { transaction_id })
+        .expect("install")
+    {
+        CommandResult::PreparedInstalled { projection, .. } => {
+            serde_json::to_value(projection).expect("projection json")
+        }
+        other => panic!("unexpected result: {other:?}"),
+    }
+}
+
+fn spawn_nodes(projection: &Value) -> Vec<Value> {
+    projection["nodes"]
+        .as_array()
+        .expect("nodes")
+        .iter()
+        .filter(|node| node["kind"] == "Spawn")
+        .cloned()
+        .collect()
+}
+
+#[test]
+fn spawn_arrival_and_reply_cross_the_json_abi() {
+    let mut runtime = runtime();
+    runtime
+        .execute(Command::ObserveSources {
+            characters: vec![user(1)],
+        })
+        .expect("observe user");
+    let spawn = serde_json::from_value::<Operation>(serde_json::json!({
+        "type": "spawn",
+        "tasks": [
+            { "summary": "first", "prompt": "do the first part" },
+            { "summary": "second", "prompt": "do the second part" }
+        ]
+    }))
+    .expect("spawn operation");
+    let projection = commit_sampling(&mut runtime, vec![spawn], assistant(2));
+    let births = spawn_nodes(&projection);
+    assert_eq!(births.len(), 2);
+    assert!(births.iter().all(|node| node["spawn_outcome"].is_null()));
+    assert_eq!(births[0]["memory"][0]["Birth"]["task"]["summary"], "first");
+
+    let arrival = serde_json::json!({
+        "schema": ABI_SCHEMA,
+        "request": {
+            "type": "observe_sources",
+            "characters": [{
+                "type": "arrival",
+                "boundary": 3,
+                "arrival": {
+                    "producer": births[0]["id"],
+                    "outcome": "completed",
+                    "memory": "first part done"
+                }
+            }]
+        }
+    });
+    let response: Value =
+        serde_json::from_str(&runtime.dispatch_json(&arrival.to_string())).expect("response");
+    assert_eq!(response["ok"], true, "{response}");
+
+    let reply = serde_json::from_value::<SourceCharacter>(serde_json::json!({
+        "type": "message", "boundary": 4, "role": "reply", "content": "first part is in"
+    }))
+    .expect("reply character");
+    let projection = commit_sampling(&mut runtime, Vec::new(), reply);
+    let births = spawn_nodes(&projection);
+    assert_eq!(births[0]["spawn_outcome"], "completed");
+    assert!(births[1]["spawn_outcome"].is_null());
 }

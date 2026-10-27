@@ -2,22 +2,18 @@ import type {
   ReplayItem,
   SamplingArchiveRecord,
   SourceSnapshot,
-  SpawnResult,
   SpineRuntimeClient,
 } from "@spinejit/spine-sdk";
 
 import { archiveRecordId } from "../controller.js";
 import type { SpineHostAdapter } from "../host-adapter.js";
-import { recoverStagedSpawnResults, spawnResultListsEqual } from "../spawn.js";
 import { isPiHostSystemMessage, PiSourceBindings, sourceObservation, type PiAgentMessage } from "./messages.js";
 import {
   PI_ADAPTER_ID,
   PI_ARCHIVE_ENTRY_TYPE,
   PI_COMPACT_ENTRY_TYPE,
-  PI_SPAWN_TERMINAL_ENTRY_TYPE,
   type PiSpineArchiveEntry,
   type PiSpineCompactEntry,
-  type PiSpawnTerminalEntry,
 } from "./protocol.js";
 
 export interface PiBranchEntry {
@@ -71,7 +67,6 @@ export function buildPiReplayPlan(options: BuildPiReplayPlanOptions): PiReplayPl
   let sources: PiReplaySource[] = [];
   let firstArchiveThread: string | null = null;
   let boundary = 0;
-  const spawnStaging = new Map<string, SpawnResult[]>();
   let compactAwaitingPiEntry = false;
 
   for (const entry of options.branch) {
@@ -107,7 +102,6 @@ export function buildPiReplayPlan(options: BuildPiReplayPlanOptions): PiReplayPl
     if (entry.type === "custom" && entry.customType === PI_ARCHIVE_ENTRY_TYPE) {
       const archive = decodeArchiveEntry(entry.data);
       firstArchiveThread ??= archive.record.record.attempt_id.thread;
-      verifyCommittedSpawnStaging(archive.record, spawnStaging);
       inputs.push({ type: "archive", record: archive.record });
       continue;
     }
@@ -132,13 +126,6 @@ export function buildPiReplayPlan(options: BuildPiReplayPlanOptions): PiReplayPl
       boundary = compact.barrier.replacement_boundaries.at(-1)! + 1;
       continue;
     }
-    if (entry.type === "custom" && entry.customType === PI_SPAWN_TERMINAL_ENTRY_TYPE) {
-      const staged = decodeSpawnTerminalEntry(entry.data);
-      const results = spawnStaging.get(staged.batchId) ?? [];
-      results.push(staged.result);
-      spawnStaging.set(staged.batchId, results);
-      continue;
-    }
 
     for (const message of options.messagesForEntry(entry)) {
       if (isPiHostSystemMessage(message)) continue;
@@ -153,12 +140,6 @@ export function buildPiReplayPlan(options: BuildPiReplayPlanOptions): PiReplayPl
     }
   }
 
-  if (spawnStaging.size !== 0) {
-    throw new PiSessionRecoveryError(
-      `Pi session has uncommitted Spine Spawn staging for ${[...spawnStaging.keys()].join(", ")}; ` +
-        "the Pi extension API cannot restore a native tool result after restart",
-    );
-  }
   if (compactAwaitingPiEntry) {
     throw new PiSessionRecoveryError(
       "Pi Spine compact entry is missing its native compaction acknowledgement",
@@ -279,19 +260,6 @@ function archiveIdentityMatches(
   return durabilityId === archiveRecordId(record);
 }
 
-function decodeSpawnTerminalEntry(value: unknown): PiSpawnTerminalEntry {
-  if (
-    !isRecord(value) ||
-    value.schema !== PI_ADAPTER_ID ||
-    typeof value.batchId !== "string" ||
-    value.batchId.length === 0 ||
-    !isRecord(value.result)
-  ) {
-    throw new PiSessionRecoveryError("Pi Spine Spawn staging entry is malformed");
-  }
-  return value as unknown as PiSpawnTerminalEntry;
-}
-
 function decodeCompactEntry(value: unknown): PiSpineCompactEntry {
   if (
     !isRecord(value) ||
@@ -325,33 +293,6 @@ function storedEntryId(
 ): string | null {
   const entryId = entryIds?.[index];
   return typeof entryId === "string" && entryId.length > 0 ? entryId : null;
-}
-
-function verifyCommittedSpawnStaging(
-  archive: SamplingArchiveRecord,
-  staging: Map<string, SpawnResult[]>,
-): void {
-  if (archive.type !== "sampling_commit") return;
-  for (const execution of archive.record.executions) {
-    if (execution.operation.type !== "spawn" || execution.origin.type !== "direct") continue;
-    const batchId = execution.origin.execution_ref;
-    const staged = staging.get(batchId);
-    if (staged === undefined) continue;
-    let recovered: SpawnResult[];
-    try {
-      recovered = recoverStagedSpawnResults(execution.operation.tasks, staged);
-    } catch (cause) {
-      throw new PiSessionRecoveryError(
-        `Pi Spine Spawn staging for ${batchId} does not form a complete ordered receipt: ${String(cause)}`,
-      );
-    }
-    if (!spawnResultListsEqual(recovered, execution.operation.terminal_results)) {
-      throw new PiSessionRecoveryError(
-        `Pi Spine Spawn staging for ${batchId} disagrees with the canonical commit`,
-      );
-    }
-    staging.delete(batchId);
-  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

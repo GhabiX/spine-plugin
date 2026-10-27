@@ -9,8 +9,7 @@ use spine_core::host::RawBoundary;
 use spine_core::host::SamplingArchiveRecord;
 use spine_core::host::SamplingCommitId;
 use spine_core::host::SourceCellId;
-use spine_core::host::SpawnOutcome;
-use spine_core::host::SpawnResult;
+use spine_core::host::SpawnArrival;
 use spine_core::host::SpawnTask;
 use spine_core::host::SpineChar;
 use spine_core::host::SpineCompactBarrierV1;
@@ -18,7 +17,7 @@ use spine_core::host::SpineOperationFact;
 use spine_core::host::SpineProjection;
 use spine_core::host::TokenUsageSample;
 
-pub const ABI_SCHEMA: &str = "spine-sdk/v2";
+pub const ABI_SCHEMA: &str = "spine-sdk/v3";
 pub const SOURCE_SNAPSHOT_SCHEMA: &str = "spine.source.snapshot.v1";
 
 #[derive(Clone, Debug, Deserialize)]
@@ -122,6 +121,10 @@ pub enum SourceCharacter {
         boundary: u64,
         item: ContextItem,
     },
+    Arrival {
+        boundary: u64,
+        arrival: SpawnArrival,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Deserialize)]
@@ -130,6 +133,7 @@ pub enum Role {
     User,
     ContextualUser,
     Assistant,
+    Reply,
     Developer,
     System,
 }
@@ -149,7 +153,6 @@ pub enum Operation {
     },
     Spawn {
         tasks: Vec<SpawnTaskDto>,
-        terminal_results: Vec<SpawnResultDto>,
     },
 }
 
@@ -158,26 +161,6 @@ pub enum Operation {
 pub struct SpawnTaskDto {
     pub summary: String,
     pub prompt: String,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SpawnResultDto {
-    pub ordinal: u32,
-    pub outcome: SpawnOutcomeDto,
-    pub memory_body: String,
-    #[serde(default)]
-    pub diagnostic: Option<String>,
-    #[serde(default)]
-    pub execution_ref: Option<String>,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SpawnOutcomeDto {
-    Completed,
-    Errored,
-    Aborted,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -274,6 +257,10 @@ impl SourceCharacter {
                 boundary: RawBoundary(boundary),
                 item,
             },
+            Self::Arrival { boundary, arrival } => SpineChar::Arrival {
+                boundary: RawBoundary(boundary),
+                arrival,
+            },
         }
     }
 }
@@ -284,6 +271,7 @@ impl Role {
             Self::User => MessageRole::User,
             Self::ContextualUser => MessageRole::ContextualUser,
             Self::Assistant => MessageRole::Assistant,
+            Self::Reply => MessageRole::Reply,
             Self::Developer => MessageRole::Developer,
             Self::System => MessageRole::System,
         }
@@ -302,15 +290,8 @@ impl Operation {
                 closed_memory,
                 next_summary,
             },
-            Self::Spawn {
-                tasks,
-                terminal_results,
-            } => SpineOperationFact::Spawn {
+            Self::Spawn { tasks } => SpineOperationFact::Spawn {
                 tasks: tasks.into_iter().map(SpawnTaskDto::into_core).collect(),
-                terminal_results: terminal_results
-                    .into_iter()
-                    .map(SpawnResultDto::into_core)
-                    .collect(),
             },
         };
         (ExecutionOrigin::Direct { execution_ref }, operation)
@@ -322,22 +303,6 @@ impl SpawnTaskDto {
         SpawnTask {
             summary: self.summary,
             prompt: self.prompt,
-        }
-    }
-}
-
-impl SpawnResultDto {
-    fn into_core(self) -> SpawnResult {
-        SpawnResult {
-            ordinal: self.ordinal,
-            outcome: match self.outcome {
-                SpawnOutcomeDto::Completed => SpawnOutcome::Completed,
-                SpawnOutcomeDto::Errored => SpawnOutcome::Errored,
-                SpawnOutcomeDto::Aborted => SpawnOutcome::Aborted,
-            },
-            memory_body: self.memory_body,
-            diagnostic: self.diagnostic,
-            execution_ref: self.execution_ref,
         }
     }
 }

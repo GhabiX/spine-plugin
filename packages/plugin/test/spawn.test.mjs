@@ -1,327 +1,98 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import {
-  executeSpawnBatch,
-  recoverStagedSpawnResults,
-  spawnResultsEqual,
-  SpawnBatchExecutionError,
-  SpawnRecoveryCancelledError,
-  SpawnRecoveryError,
-} from "../dist/index.js";
+import { runSpawnChild, toArrival } from "../dist/spawn.js";
 
-const tasks = [
-  { summary: "first", prompt: "run first" },
-  { summary: "second", prompt: "run second" },
-];
+const task = { summary: "child", prompt: "do the work" };
 
-test("spawn returns task order and durably stages each terminal result", async () => {
-  const releases = Promise.withResolvers();
-  const staged = [];
-  const results = await executeSpawnBatch({
-    batchId: "batch-1",
-    tasks,
+function scripted(...terminals) {
+  const calls = [];
+  return {
+    calls,
     executor: {
-      async execute(task, { ordinal }) {
-        if (ordinal === 0) await releases.promise;
-        else releases.resolve();
-        return {
-          outcome: "completed",
-          memoryBody: `${task.summary}-memory`,
-          executionRef: `child-${ordinal}`,
-        };
+      async execute(_task, context) {
+        calls.push({ attempt: context.attempt, mode: context.mode, guidance: context.guidance });
+        const next = terminals.shift();
+        if (next instanceof Error) throw next;
+        return next;
       },
     },
-    staging: {
-      async persistTerminal(batchId, result) {
-        staged.push([batchId, result]);
-      },
-    },
-  });
-
-  assert.deepEqual(results.map(({ ordinal }) => ordinal), [0, 1]);
-  assert.deepEqual(results.map(({ memory_body }) => memory_body), ["first-memory", "second-memory"]);
-  assert.deepEqual(results.map(({ diagnostic }) => diagnostic), [null, null]);
-  assert.deepEqual(staged.map(([, result]) => result.ordinal).sort(), [0, 1]);
-  assert.deepEqual(staged.map(([, result]) => result.diagnostic).sort(), [null, null]);
-});
-
-test("spawn rejects over-limit batches before starting child work", async () => {
-  let executed = 0;
-  const tooMany = Array.from({ length: 17 }, (_, ordinal) => ({
-    summary: `task-${ordinal}`,
-    prompt: "bounded assignment",
-  }));
-  await assert.rejects(
-    executeSpawnBatch({
-      batchId: "batch-too-many",
-      tasks: tooMany,
-      executor: {
-        async execute() {
-          executed += 1;
-          return { outcome: "completed", memoryBody: "should not run" };
-        },
-      },
-      staging: { async persistTerminal() {} },
-    }),
-    /at most 16 tasks/,
-  );
-  assert.equal(executed, 0);
-});
-
-test("spawn aborts siblings and rejects the whole batch without invented memory", async () => {
-  let siblingAborted = false;
-  const execution = executeSpawnBatch({
-    batchId: "batch-fail",
-    tasks,
-    executor: {
-      async execute(_task, { ordinal, signal }) {
-        if (ordinal === 0) throw new Error("child crashed");
-        await new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true }));
-        siblingAborted = true;
-        throw signal.reason;
-      },
-    },
-    staging: { async persistTerminal() {} },
-  });
-
-  await assert.rejects(
-    execution,
-    (error) => error instanceof SpawnBatchExecutionError && error.batchId === "batch-fail",
-  );
-  assert.equal(siblingAborted, true);
-});
-
-test("spawn waits for aborted siblings to terminate before rejecting", async () => {
-  const siblingRelease = Promise.withResolvers();
-  let siblingSettled = false;
-  const execution = executeSpawnBatch({
-    batchId: "batch-settle",
-    tasks,
-    executor: {
-      async execute(_task, { ordinal, signal }) {
-        if (ordinal === 0) throw new Error("child crashed");
-        await new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true }));
-        await siblingRelease.promise;
-        siblingSettled = true;
-        throw signal.reason;
-      },
-    },
-    staging: { async persistTerminal() {} },
-  });
-  const rejection = assert.rejects(execution, SpawnBatchExecutionError);
-
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(siblingSettled, false);
-  siblingRelease.resolve();
-  await rejection;
-  assert.equal(siblingSettled, true);
-});
-
-test("spawn rejects structurally invalid terminal results before staging", async () => {
-  let persisted = false;
-  await assert.rejects(
-    executeSpawnBatch({
-      batchId: "batch-invalid",
-      tasks,
-      executor: {
-        async execute() {
-          return { outcome: "errored", memoryBody: "bounded failure memory" };
-        },
-      },
-      staging: { async persistTerminal() { persisted = true; } },
-    }),
-    SpawnBatchExecutionError,
-  );
-  assert.equal(persisted, false);
-});
-
-test("spawn rejects a terminal memory that exceeds the core byte limit", async () => {
-  let persisted = false;
-  await assert.rejects(
-    executeSpawnBatch({
-      batchId: "batch-large-memory",
-      tasks,
-      executor: {
-        async execute() {
-          return { outcome: "completed", memoryBody: "m".repeat(32 * 1024 + 1) };
-        },
-      },
-      staging: { async persistTerminal() { persisted = true; } },
-    }),
-    SpawnBatchExecutionError,
-  );
-  assert.equal(persisted, false);
-});
-
-test("spawn result equality treats omitted optional fields as JSON null", () => {
-  const omitted = {
-    ordinal: 0,
-    outcome: "completed",
-    memory_body: "ALPHA",
-    execution_ref: "spawn-1:0",
   };
-  const wasm = {
-    ordinal: 0,
-    outcome: "completed",
-    memory_body: "ALPHA",
-    diagnostic: null,
-    execution_ref: "spawn-1:0",
-  };
-  assert.equal(spawnResultsEqual(omitted, wasm), true);
-  assert.notEqual(JSON.stringify(omitted), JSON.stringify(wasm));
-  assert.equal(spawnResultsEqual(omitted, { ...wasm, memory_body: "BETA" }), false);
-  assert.equal(spawnResultsEqual(omitted, { ...wasm, diagnostic: "child stderr" }), false);
-  assert.equal(
-    spawnResultsEqual(
-      { ordinal: 0, outcome: "completed", memory_body: "ALPHA" },
-      { ordinal: 0, outcome: "completed", memory_body: "ALPHA", diagnostic: null, execution_ref: null },
-    ),
-    true,
-  );
+}
+
+test("a completed child arrives with its memory and nothing else", async () => {
+  const { executor } = scripted({ outcome: "completed", memory: "done", executionRef: "ref-1" });
+  const arrival = await runSpawnChild({ producer: [0, 2], task, executor, signal: new AbortController().signal });
+  assert.deepEqual(arrival, { producer: [0, 2], outcome: "completed", memory: "done", execution_ref: "ref-1" });
 });
 
-test("spawn recovery restores task order and rejects partial staging", () => {
-  const staged = [
-    { ordinal: 1, outcome: "completed", memory_body: "second memory" },
-    { ordinal: 0, outcome: "completed", memory_body: "first memory" },
-  ];
-  assert.deepEqual(
-    recoverStagedSpawnResults(tasks, staged).map(({ ordinal }) => ordinal),
-    [0, 1],
-  );
-  assert.throws(
-    () => recoverStagedSpawnResults(tasks, staged.slice(0, 1)),
-    SpawnRecoveryError,
-  );
+test("a failed child arrives with a diagnostic and no memory", async () => {
+  const { executor } = scripted({ outcome: "errored", memory: "partial", diagnostic: "exit 2" });
+  const arrival = await runSpawnChild({ producer: [0, 2], task, executor, signal: new AbortController().signal });
+  assert.deepEqual(arrival, { producer: [0, 2], outcome: "errored", diagnostic: "exit 2" });
 });
 
-test("recoverable spawn gates settled failures and stages final results once", async () => {
-  const attempts = [];
-  const staged = [];
-  const decisions = [{ action: "continue" }, { action: "abandon" }];
-  const results = await executeSpawnBatch({
-    batchId: "recoverable",
-    tasks,
-    recovery: {
-      async choose(failures) {
-        assert.deepEqual(failures.map((failure) => failure.ordinal), [0]);
-        return decisions.shift();
-      },
-    },
-    executor: {
-      async execute(task, context) {
-        attempts.push([task.summary, context.ordinal, context.attempt, context.mode]);
-        return context.ordinal === 0
-          ? { outcome: "errored", memoryBody: "failed", diagnostic: "failed" }
-          : { outcome: "completed", memoryBody: "done" };
-      },
-    },
-    staging: { async persistTerminal(_batchId, result) { staged.push(result); } },
-  });
-  assert.deepEqual(attempts, [
-    ["first", 0, 0, "initial"],
-    ["second", 1, 0, "initial"],
-    ["first", 0, 0, "continue"],
-  ]);
-  assert.deepEqual(results.map((result) => result.outcome), ["errored", "completed"]);
-  assert.deepEqual(staged.map((result) => result.ordinal), [0, 1]);
+test("arrivals the core would reject are shaped into accepted ones", () => {
+  const oversized = toArrival([0, 1], { outcome: "completed", memory: "x".repeat(32 * 1024 + 1) });
+  assert.equal(oversized.outcome, "errored");
+  assert.match(oversized.diagnostic, /exceeds 32768 bytes/);
+  assert.equal(oversized.memory, undefined);
+
+  const empty = toArrival([0, 1], { outcome: "completed", memory: "  " });
+  assert.deepEqual(empty, { producer: [0, 1], outcome: "errored", diagnostic: "spawn child ended without typed memory" });
+
+  const long = toArrival([0, 1], { outcome: "errored", diagnostic: "é".repeat(4096) });
+  assert.ok(new TextEncoder().encode(long.diagnostic).byteLength <= 4096);
 });
 
-test("recoverable spawn exposes Continue capability without changing the receipt", async () => {
-  const seen = [];
-  const staged = [];
-  const results = await executeSpawnBatch({
-    batchId: "recoverability",
-    tasks,
-    recovery: {
-      async choose(failures) {
-        seen.push(failures.map(({ ordinal, continueable, continueReason }) => ({
-          ordinal,
-          continueable,
-          continueReason,
-        })));
-        return { action: "abandon" };
-      },
-    },
-    executor: {
-      async execute(task, context) {
-        return context.ordinal === 0
-          ? {
-            outcome: "errored",
-            memoryBody: "session cannot continue",
-            diagnostic: "session identity changed",
-            recovery: { continueable: false, reason: "session identity changed" },
-          }
-          : { outcome: "completed", memoryBody: `${task.summary}-memory` };
-      },
-    },
-    staging: { async persistTerminal(_batchId, result) { staged.push(result); } },
-  });
-  assert.deepEqual(seen, [[{
-    ordinal: 0,
-    continueable: false,
-    continueReason: "session identity changed",
-  }]]);
-  assert.equal("continueable" in results[0], false);
-  assert.deepEqual(staged.map(({ ordinal }) => ordinal), [0, 1]);
-});
-
-test("recoverable spawn rejects an impossible Continue decision", async () => {
-  const staged = [];
-  await assert.rejects(
-    executeSpawnBatch({
-      batchId: "continue-unavailable",
-      tasks,
-      recovery: {
-        async choose() {
-          return { action: "continue" };
-        },
-      },
-      executor: {
-        async execute(_task, context) {
-          return context.ordinal === 0
-            ? {
-              outcome: "errored",
-              memoryBody: "session cannot continue",
-              diagnostic: "session identity changed",
-              recovery: { continueable: false, reason: "session identity changed" },
-            }
-            : { outcome: "completed", memoryBody: "done" };
-        },
-      },
-      staging: { async persistTerminal(_batchId, result) { staged.push(result); } },
-    }),
-    SpawnRecoveryError,
-  );
-  assert.deepEqual(staged, []);
-});
-
-test("recoverable spawn cancellation does not stage provisional results", async () => {
-  const attempts = [];
-  const staged = [];
+test("cancellation ends as aborted unless the child had already returned", async () => {
   const controller = new AbortController();
-  await assert.rejects(
-    executeSpawnBatch({
-      batchId: "retry",
-      tasks,
-      signal: controller.signal,
-      recovery: {
-        async choose() {
-          controller.abort();
-          return { action: "retry" };
-        },
-      },
-      executor: {
-        async execute(task, context) {
-          attempts.push([task.summary, context.attempt, context.mode]);
-          return { outcome: "errored", memoryBody: "failed", diagnostic: "failed" };
-        },
-      },
-      staging: { async persistTerminal(_batchId, result) { staged.push(result); } },
-    }),
-    SpawnRecoveryCancelledError,
+  controller.abort();
+  const { executor } = scripted({ outcome: "errored", diagnostic: "killed" });
+  const aborted = await runSpawnChild({ producer: [0, 1], task, executor, signal: controller.signal });
+  assert.deepEqual(aborted, { producer: [0, 1], outcome: "aborted", diagnostic: "killed" });
+
+  assert.equal(toArrival([0, 1], { outcome: "completed", memory: "late" }, true).outcome, "completed");
+});
+
+test("an executor exception becomes an errored arrival", async () => {
+  const { executor } = scripted(new Error("spawn ENOENT"));
+  const arrival = await runSpawnChild({ producer: [0, 1], task, executor, signal: new AbortController().signal });
+  assert.deepEqual(arrival, { producer: [0, 1], outcome: "errored", diagnostic: "spawn ENOENT" });
+});
+
+test("recovery decides per child: retry and continue run again, abandon arrives as failed", async () => {
+  const decisions = [{ action: "retry", guidance: " try smaller " }, { action: "continue" }];
+  const seen = [];
+  const recovery = {
+    async choose(failure) {
+      seen.push(failure);
+      return decisions.shift();
+    },
+  };
+  const { executor, calls } = scripted(
+    { outcome: "errored", diagnostic: "first", recovery: { continueable: false, reason: "no session" } },
+    { outcome: "errored", diagnostic: "second" },
+    { outcome: "completed", memory: "third time" },
   );
-  assert.deepEqual(attempts, [["first", 0, "initial"], ["second", 0, "initial"]]);
-  assert.deepEqual(staged, []);
+  const arrival = await runSpawnChild({ producer: [0, 1], task, executor, recovery, signal: new AbortController().signal });
+  assert.equal(arrival.outcome, "completed");
+  assert.deepEqual(calls, [
+    { attempt: 0, mode: "initial", guidance: undefined },
+    { attempt: 1, mode: "retry", guidance: "try smaller" },
+    { attempt: 1, mode: "continue", guidance: undefined },
+  ]);
+  assert.equal(seen[0].continueable, false);
+  assert.equal(seen[0].continueReason, "no session");
+  assert.equal(seen[0].retryable, true);
+
+  const abandon = scripted({ outcome: "errored", diagnostic: "broken" });
+  const abandoned = await runSpawnChild({
+    producer: [0, 1],
+    task,
+    executor: abandon.executor,
+    recovery: { async choose() { return { action: "abandon" }; } },
+    signal: new AbortController().signal,
+  });
+  assert.deepEqual(abandoned, { producer: [0, 1], outcome: "errored", diagnostic: "broken" });
 });

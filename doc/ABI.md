@@ -1,6 +1,6 @@
 # Portable ABI Contract
 
-Status: implementation contract for portable schema `spine-sdk/v2` and
+Status: implementation contract for portable schema `spine-sdk/v3` and
 context recipe `spine.context.plan.v2`.
 
 The JavaScript boundary is a coarse stateful runtime. Rust-only ownership types
@@ -56,7 +56,29 @@ delegates prompt composition to the configured `SpineConfig` without exposing
 the reducer or its internal state.
 
 
-## Current plans and durable history
+## Spawn, arrivals and replies (v3)
+
+A `spawn` operation carries only its `tasks`. Committing it creates one birth
+node per task (`kind: "Spawn"`, closed, memory `[Birth { task }]`) under the
+cursor; the commit does not wait for the children. Each child's final result
+enters the parent later as a source character of its own,
+`{ type: "arrival", boundary, arrival: { producer, outcome, memory?, diagnostic?, execution_ref? } }`,
+where `producer` is the birth node id. A completed arrival carries non-empty
+`memory`; an errored or aborted one carries `diagnostic` and no memory. The
+core admits each producer at most once and places the arrival at the cursor
+where it is admitted, so it stays in the context exactly where the model first
+saw it. A node's `spawn_outcome` is `null` until its arrival is admitted.
+Close, Next and Compact are rejected while a birth inside the scope has not
+arrived.
+
+The source role `reply` marks an assistant message that ended its sampling with
+`stop` and no tool call; the host passes only its text blocks. It renders as
+assistant text and is kept, with user messages and arrivals, in the memory of
+the node that closes over it. A reply in the same sampling as a structural
+operation is rejected.
+
+v3 removes v2's `terminal_results`, `SpawnResult` and `SpawnEvidence`; a v2
+client is rejected by the schema check.
 
 A v2 context recipe contains the ordered `cells` for the current projection.
 Memory items are represented in those cells when visible; the recipe and its

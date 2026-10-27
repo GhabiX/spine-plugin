@@ -1,6 +1,6 @@
 /** Shared visual vocabulary for the pinned Spine tree and its navigation view. */
 export type SpineTreeStatus = "Live" | "Opened" | "Closed" | "Compacted";
-export type SpineTreeKind = "RootEpoch" | "Task";
+export type SpineTreeKind = "RootEpoch" | "Task" | "Spawn";
 export type SpineTreeSpawnOutcome = "completed" | "errored" | "aborted";
 
 export interface SpineTreeStyleNode {
@@ -50,6 +50,8 @@ export function spineTreeMarker(
   if (node.spawnOutcome === "completed") return "✓";
   if (node.spawnOutcome === "errored") return "×";
   if (node.spawnOutcome === "aborted") return "!";
+  // A birth whose child has not arrived yet is still running.
+  if (node.kind === "Spawn") return "◐";
   if (node.status === "Live") return "◉";
   if (node.status === "Closed") return "✓";
   if (node.status === "Compacted") return "◌";
