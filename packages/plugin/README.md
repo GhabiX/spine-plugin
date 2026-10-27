@@ -59,7 +59,7 @@ From this repository's root, build the TypeScript packages in dependency order:
 npm run build -w @spinejit/spine-sdk
 npm run build -w @spinejit/spine-host
 npm run build -w @spinejit/pi-spinejit
-pi install /absolute/path/to/spine-sdk-plugin/packages/plugin
+pi install /absolute/path/to/spine-plugin/packages/plugin
 ```
 
 Users install only the Pi package; npm

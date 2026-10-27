@@ -17,7 +17,7 @@ pi install npm:@spinejit/pi-spinejit
 ```
 
 The source repository is
-[`GhabiX/spine-sdk-plugin`](https://github.com/GhabiX/spine-sdk-plugin). Release
+[`GhabiX/spine-plugin`](https://github.com/GhabiX/spine-plugin). Release
 publishing is manual through the `Publish npm packages` workflow: select `plugin`
 for `@spinejit/pi-spinejit`. Configure its npm Trusted Publisher entry before
 using the workflow. SDK and host are published separately only when their
@@ -247,7 +247,7 @@ For Pi SDK development, run these commands from this repository's root:
 npm run build -w @spinejit/spine-sdk
 npm run build -w @spinejit/spine-host
 npm run build -w @spinejit/pi-spinejit
-pi install /absolute/path/to/spine-sdk-plugin/packages/plugin
+pi install /absolute/path/to/spine-plugin/packages/plugin
 ```
 
 Rebuild after TypeScript changes, then `/reload` or restart Pi and start a new

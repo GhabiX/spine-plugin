@@ -78,7 +78,7 @@ navigation 18; **380 passed / 0 failed**. The three packages also pass
 `npm publish --dry-run --access public` and the core-source verification.
 
 The source repository is
-[`GhabiX/spine-sdk-plugin`](https://github.com/GhabiX/spine-sdk-plugin). The
+[`GhabiX/spine-plugin`](https://github.com/GhabiX/spine-plugin). The
 manual `.github/workflows/publish.yml` workflow publishes one selected package.
 Configure npm Trusted Publishing for that package before dispatching it.
 
@@ -155,8 +155,10 @@ publish SDK, then host, then plugin as applicable.
 A new npm package requires an authenticated first publish or a configured npm
 publishing mechanism. The old package's Trusted Publisher setting does not
 transfer to the new name. For subsequent OIDC releases configure
-`@spinejit/pi-spinejit` with GitHub owner `GhabiX`, repository `spine-sdk-plugin`,
-and workflow `publish.yml`.
+`@spinejit/pi-spinejit` with GitHub owner `GhabiX`, repository `spine-plugin`,
+and workflow `publish.yml`. The repository was renamed from `spine-sdk-plugin`
+on 2026-10-27; update any Trusted Publisher entry that still names the old
+repository before the next OIDC release.
 
 After publishing and verifying the new package, mark the old version deprecated:
 
@@ -165,8 +167,8 @@ npm deprecate '@spinejit/spine-plugin@0.1.0' 'Renamed to @spinejit/pi-spinejit. 
 ```
 
 Deprecation preserves old installations and provides a migration warning.
-Only apply it after the new package can be installed. The repository name stays
-`spine-sdk-plugin` because it also contains the SDK and host.
+Only apply it after the new package can be installed. The repository is named
+`spine-plugin`; the SDK and host it also contains keep their own package names.
 
 For interactive releases, use a current npm CLI (at least 11.15 for staged
 publishing) and `--browser=false` on headless hosts. Complete npm's web 2FA

@@ -7,13 +7,13 @@
   "description": "Minimal host contract for SpineJIT plugins and Pi session adapters.",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/GhabiX/spine-sdk-plugin.git",
+    "url": "git+https://github.com/GhabiX/spine-plugin.git",
     "directory": "packages/host"
   },
   "bugs": {
-    "url": "https://github.com/GhabiX/spine-sdk-plugin/issues"
+    "url": "https://github.com/GhabiX/spine-plugin/issues"
   },
-  "homepage": "https://github.com/GhabiX/spine-sdk-plugin#readme",
+  "homepage": "https://github.com/GhabiX/spine-plugin#readme",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

@@ -7,13 +7,13 @@
   "description": "SpineJIT context management for Pi, backed by the portable Spine SDK.",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/GhabiX/spine-sdk-plugin.git",
+    "url": "git+https://github.com/GhabiX/spine-plugin.git",
     "directory": "packages/plugin"
   },
   "bugs": {
-    "url": "https://github.com/GhabiX/spine-sdk-plugin/issues"
+    "url": "https://github.com/GhabiX/spine-plugin/issues"
   },
-  "homepage": "https://github.com/GhabiX/spine-sdk-plugin#readme",
+  "homepage": "https://github.com/GhabiX/spine-plugin#readme",
   "keywords": [
     "pi-package",
     "spinejit"
