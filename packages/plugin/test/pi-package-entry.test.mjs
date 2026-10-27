@@ -26,8 +26,10 @@ test("packed Pi manifest loads the same complete tool catalog as the local packa
   ], { cwd: packageDir, maxBuffer: 4 * 1024 * 1024 });
   await writeFile(join(artifacts, "pack.json"), stdout);
   await writeFile(join(artifacts, "pack.stderr"), stderr);
-  const [pack] = JSON.parse(stdout);
   const manifest = JSON.parse(await readFile(join(packageDir, "package.json"), "utf8"));
+  // npm 10 prints an array of packs; npm 12 keys them by package name.
+  const packed = JSON.parse(stdout);
+  const pack = Array.isArray(packed) ? packed[0] : packed[manifest.name];
   const files = new Set(pack.files.map(({ path }) => path));
   assert.ok(manifest.pi.extensions.length > 0);
   for (const entry of manifest.pi.extensions) {

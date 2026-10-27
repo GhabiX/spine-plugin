@@ -149,8 +149,11 @@ const preflight = join(piRoot, "node_modules/tsx/dist/preflight.cjs");
 const loaderFile = join(piRoot, "node_modules/tsx/dist/loader.mjs");
 const cli = join(piRoot, "packages/coding-agent/src/cli.ts");
 const dump = join(here, "dump-invocation.mjs");
+// These run against the Pi source checkout next to this workspace (scaffold/pi-home/pi);
+// a clone without it, such as CI, skips them.
+const localPi = existsSync(piRoot) ? {} : { skip: "no Pi source checkout at ../pi-home/pi" };
 
-test("live tsx execArgv plus script reconstructs the parent image", () => {
+test("live tsx execArgv plus script reconstructs the parent image", localPi, () => {
   assert.equal(existsSync(preflight), true);
   assert.equal(existsSync(loaderFile), true);
   assert.equal(existsSync(dump), true);
@@ -167,7 +170,7 @@ test("live tsx execArgv plus script reconstructs the parent image", () => {
   });
 });
 
-test("PI cli.ts --help from a foreign cwd retains execArgv and TSX_TSCONFIG_PATH", () => {
+test("PI cli.ts --help from a foreign cwd retains execArgv and TSX_TSCONFIG_PATH", localPi, () => {
   assert.equal(existsSync(cli), true);
   const env = { ...process.env, TSX_TSCONFIG_PATH: join(piRoot, "tsconfig.json") };
   // Recent Node versions can run this TypeScript entry without a loader.
