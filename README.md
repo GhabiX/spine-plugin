@@ -252,8 +252,9 @@ other Spine tools and returns an acceptance at once; the children start only
 after `turn_end` commits their births, because the tool cannot wait for the
 commit of its own turn. Each child inherits the parent's sampling-start session
 prefix (`C_child = C_parent · Δ_child`), fixed at birth, by resuming a forked Pi
-session file named by its birth id, then receives an identity/peer assignment
-envelope. The child process loads the same discovered packages/extensions as a
+session file named by its birth: the Pi entry of the sampling that bore it plus
+its birth id, since birth ids repeat across the tree branches of one session.
+It then receives an identity/peer assignment envelope. The child process loads the same discovered packages/extensions as a
 normal Pi agent, keeps the parent's active tool allowlist plus typed
 `spine_child_return`, and can use `spine_open` / `spine_close` / `spine_next` /
 `spine_spawn`.
@@ -272,6 +273,16 @@ children; their aborted arrivals do not wake the agent. Without a UI (print and
 JSON modes, and every child) the settled agent waits for a running child, whose
 arrival starts the next turn.
 
+A birth belongs to the session that bore it. A child, or a fork, continues a
+prefix that may hold births still unarrived; there they are inherited context
+(`◌` in the tree): the session neither runs them nor waits for them, and their
+arrivals go only to the session that bore them.
+
+A child's result is its `spine_child_return` call whose own tool result
+succeeded, read from the child's session file, live and after a restart alike.
+A call the child's admission refused, because its own children are still
+running, records an error result and is not a result.
+
 With a UI, a failed child enters a per-child recovery prompt: `Continue` reuses
 the same child session history, `Retry` starts a new attempt from the birth
 prefix, and `Abandon` delivers the failure. `Continue` first validates the
@@ -280,7 +291,27 @@ loader and Spine replay preflight. If the parent restarts, a child that had
 already called `spine_child_return` is redelivered from its own session file
 without running again; one that had not is offered `Continue` or `Abandon`
 (only `Abandon` without a UI), since the birth prefix is not kept outside the
-child session. Each producer is delivered at most once while it is unarrived.
+child session.
+
+An arrival is held until the core admits it. After a Stop, Pi drops queued
+steering messages, so the held arrivals are handed over again without waking
+the agent. The core admits the same arrival once and refuses a different
+result for a birth that has arrived.
+
+Known limitation: Pi 1.1 gives an extension no signal when `abort()` is called
+while the settled agent, without a UI, waits for a child, so that wait ends at
+the next arrival rather than at the abort. Print and JSON modes have no abort
+command, and their children end with the parent process; only an SDK embedding
+that calls `abort()` with `hasUI` false meets this.
+
+Three points differ from the confirmed Spawn specification and await
+confirmation. Compaction with an unarrived birth is cancelled with a notice
+rather than held in the hook; the next compaction after the children arrive
+proceeds. The `spine_spawn` receipt carries no child ids: births are numbered
+when `turn_end` commits them, and the ids appear with the birth records in the
+next context. After a parent restart an unreturned child offers `Continue` or
+`Abandon` but not `Retry`, since its birth prefix survives only in the child's
+own session.
 
 ## DeepSeek Harness extension
 

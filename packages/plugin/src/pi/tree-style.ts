@@ -2,12 +2,18 @@
 export type SpineTreeStatus = "Live" | "Opened" | "Closed" | "Compacted";
 export type SpineTreeKind = "RootEpoch" | "Task" | "Spawn";
 export type SpineTreeSpawnOutcome = "completed" | "errored" | "aborted";
+export type SpineTreeSpawnState = "pending" | "inherited" | { arrived: SpineTreeSpawnOutcome };
 
 export interface SpineTreeStyleNode {
   kind: SpineTreeKind;
   status: SpineTreeStatus;
   summary: string | null;
-  spawnOutcome: SpineTreeSpawnOutcome | null;
+  spawn: SpineTreeSpawnState | null;
+}
+
+/** The outcome of an arrived birth; null while it is pending or inherited. */
+export function spineTreeSpawnOutcome(spawn: SpineTreeSpawnState | null): SpineTreeSpawnOutcome | null {
+  return spawn !== null && typeof spawn === "object" ? spawn.arrived : null;
 }
 
 export interface SpineTreeTheme {
@@ -47,9 +53,12 @@ export function spineTreeMarker(
   // Root epochs are structural containers. The pinned tree hides them; the
   // browser keeps them as a navigation anchor and uses the neutral marker.
   if (node.kind === "RootEpoch") return "◌";
-  if (node.spawnOutcome === "completed") return "✓";
-  if (node.spawnOutcome === "errored") return "×";
-  if (node.spawnOutcome === "aborted") return "!";
+  const outcome = spineTreeSpawnOutcome(node.spawn);
+  if (outcome === "completed") return "✓";
+  if (outcome === "errored") return "×";
+  if (outcome === "aborted") return "!";
+  // An inherited birth is context here; the session that bore it joins it.
+  if (node.spawn === "inherited") return "◌";
   // A birth whose child has not arrived yet is still running.
   if (node.kind === "Spawn") return "◐";
   if (node.status === "Live") return "◉";

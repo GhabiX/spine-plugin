@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -38,6 +39,7 @@ import { SpineToolInputError } from "../tools.js";
 import { watchParent } from "./parent-watch.js";
 import type { SpawnArrival, SpawnTask, SpineProjection } from "@spinejit/spine-sdk";
 import {
+  acceptedChildReturns,
   buildChildAssignment,
   buildChildContinuation,
   childSessionPath,
@@ -46,6 +48,7 @@ import {
   readChildReturn,
   readChildSessionIdentity,
   writeChildPrefixSession,
+  type ChildBirthRef,
   type ChildSessionScope,
 } from "./child-session.js";
 import { createPiSpineAdapter } from "./index.js";
@@ -540,13 +543,13 @@ function registerLifecycleHandlers(
   });
   pi.on("agent_settled", async (event, ctx) => {
     if (slot.mode !== "sdk" || slot.current === null) return;
-    if (event.aborted) {
-      slot.current.children.stop();
-      return;
-    }
+    const { children, latestContext } = slot.current;
+    if (event.aborted) children.stop();
+    children.settle(unarrivedBirths(latestContext.projection), event.aborted);
+    if (event.aborted) return;
     // Without a UI (print mode, Spawn children) Pi exits once the agent settles.
     // Hold it until a running child arrives; that arrival starts the next turn.
-    if (!ctx.hasUI) await slot.current.children.next();
+    if (!ctx.hasUI) await children.next();
   });
   pi.on("before_agent_start", async (event, ctx) => {
     if (slot.mode !== "sdk") return;
@@ -1025,6 +1028,7 @@ async function executePiChild(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
   scope: ChildSessionScope,
+  birth: ChildBirthRef,
   prefix: readonly unknown[] | null,
   peers: readonly SpawnTask[],
   task: SpawnTask,
@@ -1033,7 +1037,7 @@ async function executePiChild(
   childInvocation?: PiChildInvocationFactory,
 ): Promise<SpawnChildTerminal> {
   const producer = child.producer.join(".");
-  const destPath = childSessionPath(scope, child.producer, child.attempt);
+  const destPath = childSessionPath(scope, birth, child.attempt);
   let sessionId: string;
   let prompt: string;
   const assignment = buildChildAssignment(task, peers);
@@ -1108,20 +1112,19 @@ async function executePiChild(
   );
   const executionRef = `${producer}:attempt-${child.attempt}:${sessionId}`;
   const processDiagnostic = childProcessDiagnostic(result);
-  let memory: string;
-  try {
-    memory = extractTypedChildMemory(result.stdout);
-  } catch (cause) {
+  // The child's own session is its result record, the same one recovery reads.
+  const accepted = acceptedChildReturns(await readFile(destPath, "utf8"));
+  if (accepted.length !== 1) {
     return {
       outcome: result.killed ? "aborted" : "errored",
-      diagnostic: clipSpawnDiagnostic(`${cause instanceof Error ? cause.message : String(cause)}; ${processDiagnostic}`),
+      diagnostic: clipSpawnDiagnostic(`Pi Spawn child accepted ${accepted.length} typed returns; ${processDiagnostic}`),
       executionRef,
     };
   }
   // The typed return is the child's result; a later exit status does not undo it.
   return {
     outcome: "completed",
-    memory,
+    memory: accepted[0]!,
     ...(result.code === 0 ? {} : { diagnostic: clipSpawnDiagnostic(processDiagnostic) }),
     executionRef,
   };
@@ -1134,38 +1137,6 @@ function childProcessDiagnostic(result: { stderr: string; code: number }): strin
 
 function clipSpawnDiagnostic(text: string): string {
   return text.length <= 1200 ? text : text.slice(0, 1200);
-}
-
-export function extractTypedChildMemory(stdout: string): string {
-  const memories: string[] = [];
-  for (const line of stdout.split("\n")) {
-    if (line.trim().length === 0) continue;
-    let event: unknown;
-    try {
-      event = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    if (!isRecord(event) || event.type !== "message_end" || !isRecord(event.message)) continue;
-    const message = event.message;
-    if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
-    for (const item of message.content) {
-      if (
-        isRecord(item) &&
-        item.type === "toolCall" &&
-        item.name === CHILD_RETURN_TOOL &&
-        isRecord(item.arguments) &&
-        typeof item.arguments.memory === "string" &&
-        item.arguments.memory.trim().length > 0
-      ) {
-        memories.push(item.arguments.memory);
-      }
-    }
-  }
-  if (memories.length !== 1) {
-    throw new Error(`Pi Spawn child returned ${memories.length} typed terminal memories`);
-  }
-  return memories[0]!;
 }
 
 const CONTROL_TOOLS = ["spine_open", "spine_close", "spine_next"] as const;
@@ -1230,6 +1201,23 @@ function childScope(ctx: ExtensionContext): ChildSessionScope {
   };
 }
 
+/** Names each birth by the Pi entry at its sampling's first source boundary on the current branch. */
+function birthRefs(ctx: ExtensionContext, births: readonly PiSpawnBirth[]): ChildBirthRef[] {
+  const entries = new Map(buildPiReplayPlan({
+    currentSessionId: ctx.sessionManager.getSessionId(),
+    branch: ctx.sessionManager.getBranch(),
+    messagesForEntry: (entry) =>
+      sessionEntryToContextMessages(entry as SessionEntry) as PiAgentMessage[],
+  }).sources.map((source) => [source.boundary, source.entryId]));
+  return births.map((birth) => {
+    const origin = entries.get(birth.start);
+    if (origin === undefined || origin === null) {
+      throw new Error(`Pi Spawn birth ${birth.producer.join(".")} has no session entry at boundary ${birth.start}`);
+    }
+    return { origin, producer: birth.producer };
+  });
+}
+
 /** Starts the children whose births this commit made; the sampling prefix is their fixed birth context. */
 function launchChildren(
   pi: ExtensionAPI,
@@ -1243,8 +1231,10 @@ function launchChildren(
   if (births.length === 0) return;
   const prefix = slot.samplingPrefix;
   const scope = childScope(ctx);
+  const refs = new Map(birthRefs(ctx, births).map((ref) => [ref.producer.join("."), ref]));
   const recovery = spawnRecoveryPolicy(ctx, pi);
   session.children.launch(births, (birth, peers, signal) => {
+    const ref = refs.get(birth.producer.join("."))!;
     const sessionIds = new Map<number, string>();
     return runSpawnChild({
       producer: birth.producer,
@@ -1253,7 +1243,7 @@ function launchChildren(
       ...(recovery === undefined ? {} : { recovery }),
       executor: {
         execute: (task, child) =>
-          executePiChild(pi, ctx, scope, prefix, peers, task, child, sessionIds, childInvocation),
+          executePiChild(pi, ctx, scope, ref, prefix, peers, task, child, sessionIds, childInvocation),
       },
     });
   });
@@ -1273,9 +1263,11 @@ async function recoverChildren(
   const births = unarrivedBirths(session.latestContext.projection);
   if (births.length === 0) return;
   const scope = childScope(ctx);
+  const refs = birthRefs(ctx, births);
   const recovery = spawnRecoveryPolicy(ctx, pi);
-  for (const birth of births) {
-    const returned = await readChildReturn(scope, birth.producer);
+  for (const [index, birth] of births.entries()) {
+    const ref = refs[index]!;
+    const returned = await readChildReturn(scope, ref);
     if (returned.memory !== null) {
       session.children.redeliver(toArrival(birth.producer, { outcome: "completed", memory: returned.memory }));
       continue;
@@ -1298,7 +1290,7 @@ async function recoverChildren(
                 : { continueable: true, retryable: false },
             };
           }
-          return executePiChild(pi, ctx, scope, null, [], task, {
+          return executePiChild(pi, ctx, scope, ref, null, [], task, {
             ...child,
             attempt: (latest?.attempt ?? 0) + child.attempt,
           }, sessionIds, childInvocation);

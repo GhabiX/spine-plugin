@@ -10,6 +10,7 @@ import {
   buildChildAssignment,
   CHILD_RETURN_TOOL,
   buildChildContinuation,
+  acceptedChildReturns,
   childSessionPath,
   inspectChildSession,
   readChildReturn,
@@ -65,48 +66,76 @@ test("written prefix session is a Pi-openable fork of the parent branch", async 
   assert.equal(branch[0].message.content, "parent prefix TOKEN");
 });
 
-test("child session path is keyed by parent session and birth id, next to the parent file", () => {
+test("child session path is keyed by parent session, birth entry and birth id, next to the parent file", () => {
   assert.equal(
-    childSessionPath({ parentSessionId: "parent-1", parentSessionFile: "/tmp/sessions/parent.jsonl" }, [0, 2, 1]),
-    "/tmp/sessions/spine-spawn/parent-1/0.2.1.jsonl",
+    childSessionPath({ parentSessionId: "parent-1", parentSessionFile: "/tmp/sessions/parent.jsonl" }, { origin: "a1b2c3d4", producer: [0, 2, 1] }),
+    "/tmp/sessions/spine-spawn/parent-1/a1b2c3d4.0.2.1.jsonl",
   );
   assert.match(
-    childSessionPath({ parentSessionId: "parent/1" }, [0, 3]),
-    /pi-spine-spawn\/parent_1\/0\.3\.jsonl$/,
+    childSessionPath({ parentSessionId: "parent/1" }, { origin: "e1", producer: [0, 3] }),
+    /pi-spine-spawn\/parent_1\/e1\.0\.3\.jsonl$/,
   );
   assert.match(
-    childSessionPath({ parentSessionId: "parent-1" }, [0, 3], 1),
-    /pi-spine-spawn\/parent-1\/0\.3\.attempt-1\.jsonl$/,
+    childSessionPath({ parentSessionId: "parent-1" }, { origin: "e1", producer: [0, 3] }, 1),
+    /pi-spine-spawn\/parent-1\/e1\.0\.3\.attempt-1\.jsonl$/,
   );
 });
 
 test("a child's typed return is read back from its own session across attempts", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-spine-return-"));
   const scope = { parentSessionId: "parent", parentSessionFile: join(root, "parent.jsonl") };
-  assert.deepEqual(await readChildReturn(scope, [0, 1]), { memory: null, latest: null });
+  const birth = { origin: "e7", producer: [0, 1] };
+  assert.deepEqual(await readChildReturn(scope, birth), { memory: null, latest: null });
 
-  const first = childSessionPath(scope, [0, 1]);
+  const first = childSessionPath(scope, birth);
   await writeChildPrefixSession({ cwd: "/tmp/project", destPath: first, entries: [] });
-  assert.deepEqual(await readChildReturn(scope, [0, 1]), { memory: null, latest: { path: first, attempt: 0 } });
+  assert.deepEqual(await readChildReturn(scope, birth), { memory: null, latest: { path: first, attempt: 0 } });
 
-  const retry = childSessionPath(scope, [0, 1], 1);
+  const retry = childSessionPath(scope, birth, 1);
   await writeChildPrefixSession({ cwd: "/tmp/project", destPath: retry, entries: [] });
   const session = SessionManager.open(retry, undefined, "/tmp/project");
   session.appendMessage({ role: "user", content: "assignment", timestamp: 1 });
-  session.appendMessage({
-    role: "assistant",
-    content: [{ type: "toolCall", id: "r", name: CHILD_RETURN_TOOL, arguments: { memory: "child result" } }],
-    api: "test",
-    provider: "test",
-    model: "test",
-    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-    stopReason: "toolUse",
-    timestamp: 2,
-  });
-  assert.deepEqual(await readChildReturn(scope, [0, 1]), { memory: "child result", latest: { path: retry, attempt: 1 } });
-  // A sibling whose id extends this one is a different child.
-  assert.deepEqual(await readChildReturn(scope, [0]), { memory: null, latest: null });
+  for (const message of returnEntries("child result")) session.appendMessage(message);
+  assert.deepEqual(await readChildReturn(scope, birth), { memory: "child result", latest: { path: retry, attempt: 1 } });
+  // A sibling whose id extends this one, or the same id born on another branch, is a different child.
+  assert.deepEqual(await readChildReturn(scope, { origin: "e7", producer: [0] }), { memory: null, latest: null });
+  assert.deepEqual(await readChildReturn(scope, { origin: "e8", producer: [0, 1] }), { memory: null, latest: null });
 });
+
+test("only a return call whose own tool result succeeded is the child's typed return", () => {
+  const jsonl = (messages) => messages.map((message) => JSON.stringify({ type: "message", message })).join("\n");
+  const [call, result] = returnEntries("child result");
+  assert.deepEqual(acceptedChildReturns(`not-json\n${jsonl([call, result])}`), ["child result"]);
+  // The child's admission blocked the call: Pi records an error result.
+  assert.deepEqual(acceptedChildReturns(jsonl(returnEntries("too early", true))), []);
+  // A call without a result, or a result for another call, returns nothing.
+  assert.deepEqual(acceptedChildReturns(jsonl([call])), []);
+  assert.deepEqual(acceptedChildReturns(jsonl([call, { ...result, toolCallId: "other" }])), []);
+  assert.deepEqual(acceptedChildReturns(jsonl([call, result, call, result])), ["child result", "child result"]);
+});
+
+/** A child's typed return as Pi records it: the call, then its tool result. */
+function returnEntries(memory, isError = false) {
+  return [
+    {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "return-1", name: "spine_child_return", arguments: { memory } }],
+      api: "test", provider: "test", model: "test",
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+      stopReason: "toolUse",
+      timestamp: 2,
+    },
+    {
+      role: "toolResult",
+      toolCallId: "return-1",
+      toolName: "spine_child_return",
+      content: [{ type: "text", text: isError ? "blocked" : "Spine child memory accepted" }],
+      isError,
+      timestamp: 3,
+    },
+  ];
+}
+
 
 test("child continuation preserves the active session and optional guidance", () => {
   const prompt = buildChildContinuation("focus on the failing test");

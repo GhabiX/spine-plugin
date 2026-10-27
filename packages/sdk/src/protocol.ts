@@ -62,6 +62,12 @@ export interface SpawnTask {
 
 export type SpawnOutcome = "completed" | "errored" | "aborted";
 
+/**
+ * Join state of a spawned child: pending until its arrival is admitted;
+ * inherited when it was born in an earlier namespace, which alone joins it.
+ */
+export type SpawnState = "pending" | "inherited" | { arrived: SpawnOutcome };
+
 /** A spawned child's final result. Completed carries memory; others carry a diagnostic. */
 export interface SpawnArrival {
   producer: SafeInteger[];
@@ -229,8 +235,8 @@ export interface NodeSnapshot {
   status: "Live" | "Opened" | "Closed" | "Compacted";
   summary: string | null;
   memory: MemorySlot[] | null;
-  /** For a Spawn node, the outcome of its admitted arrival; null until it arrives. */
-  spawn_outcome: SpawnOutcome | null;
+  /** For a Spawn node, its join state; null for other kinds. */
+  spawn: SpawnState | null;
   start: SafeInteger;
   end: SafeInteger | null;
 }

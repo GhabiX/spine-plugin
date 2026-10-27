@@ -21,7 +21,7 @@ export {
 const PRETTY_MAX_VISIBLE_SIBLINGS = 3;
 const PRETTY_ACTIVE_PARENT_DEPTH = 3;
 
-export type SpawnOutcome = "completed" | "errored" | "aborted";
+export type SpawnState = NonNullable<NodeSnapshot["spawn"]>;
 export type NodeStatus = NodeSnapshot["status"];
 export type NodeKind = NodeSnapshot["kind"];
 
@@ -31,7 +31,7 @@ export interface DisplayNode {
   kind: NodeKind;
   status: NodeStatus;
   summary: string | null;
-  spawnOutcome: SpawnOutcome | null;
+  spawn: SpawnState | null;
 }
 
 export interface SpineTheme {
@@ -56,7 +56,7 @@ export function displayNodesFromProjection(projection: SpineProjection): Display
     kind: node.kind,
     status: node.status,
     summary: node.summary,
-    spawnOutcome: node.spawn_outcome,
+    spawn: node.spawn,
   }));
 }
 
@@ -72,7 +72,7 @@ export function displayTreeSignature(projection: SpineProjection): string {
     node.kind,
     node.status,
     node.summary,
-    node.spawnOutcome,
+    node.spawn,
   ]);
   return JSON.stringify({ cursor, nodes });
 }
@@ -294,7 +294,7 @@ function bucketable(node: DisplayNode, activePath: ReadonlySet<string>): boolean
 }
 
 function isCompleted(node: DisplayNode): boolean {
-  if (node.kind === "Spawn") return node.spawnOutcome !== null;
+  if (node.kind === "Spawn") return node.spawn !== "pending";
   return node.status === "Closed" || node.status === "Compacted";
 }
 

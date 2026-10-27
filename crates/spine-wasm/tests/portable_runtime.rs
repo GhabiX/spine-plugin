@@ -594,7 +594,7 @@ fn spawn_arrival_and_reply_cross_the_json_abi() {
     let projection = commit_sampling(&mut runtime, vec![spawn], assistant(2));
     let births = spawn_nodes(&projection);
     assert_eq!(births.len(), 2);
-    assert!(births.iter().all(|node| node["spawn_outcome"].is_null()));
+    assert!(births.iter().all(|node| node["spawn"] == "pending"));
     assert_eq!(births[0]["memory"][0]["Birth"]["task"]["summary"], "first");
 
     let arrival = serde_json::json!({
@@ -622,6 +622,6 @@ fn spawn_arrival_and_reply_cross_the_json_abi() {
     .expect("reply character");
     let projection = commit_sampling(&mut runtime, Vec::new(), reply);
     let births = spawn_nodes(&projection);
-    assert_eq!(births[0]["spawn_outcome"], "completed");
-    assert!(births[1]["spawn_outcome"].is_null());
+    assert_eq!(births[0]["spawn"], serde_json::json!({"arrived": "completed"}));
+    assert_eq!(births[1]["spawn"], "pending");
 }

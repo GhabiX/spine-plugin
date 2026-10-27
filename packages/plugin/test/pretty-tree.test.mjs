@@ -6,8 +6,8 @@ import {
   formatThemedPrettySpineTreeFromNodes,
 } from "../dist/pi/pretty-tree.js";
 
-function node(nodeId, parentId, summary, status, kind = "Task", spawnOutcome = null) {
-  return { nodeId, parentId, kind, status, summary, spawnOutcome };
+function node(nodeId, parentId, summary, status, kind = "Task", outcome = null) {
+  return { nodeId, parentId, kind, status, summary, spawn: outcome === null ? null : { arrived: outcome } };
 }
 
 function rootEpoch(nodeId, summary, status) {

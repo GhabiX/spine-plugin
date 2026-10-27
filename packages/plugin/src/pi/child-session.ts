@@ -58,16 +58,28 @@ export interface ChildSessionScope {
   parentSessionFile?: string;
 }
 
-/** A child's session file for one attempt, named by its birth id. */
+/**
+ * A birth within its parent session. Birth ids repeat across Pi tree branches
+ * of one session, so the birth is named by the Pi entry of the sampling that
+ * bore it (`origin`) together with its id.
+ */
+export interface ChildBirthRef {
+  origin: string;
+  producer: readonly number[];
+}
+
+/** A child's session file for one attempt, named by its birth. */
 export function childSessionPath(
   scope: ChildSessionScope,
-  producer: readonly number[],
+  birth: ChildBirthRef,
   attempt = 0,
 ): string {
-  const name = attempt === 0
-    ? `${producer.join(".")}.jsonl`
-    : `${producer.join(".")}.attempt-${attempt}.jsonl`;
-  return join(childSessionDir(scope), name);
+  const stem = childSessionStem(birth);
+  return join(childSessionDir(scope), attempt === 0 ? `${stem}.jsonl` : `${stem}.attempt-${attempt}.jsonl`);
+}
+
+function childSessionStem(birth: ChildBirthRef): string {
+  return `${safeSegment(birth.origin)}.${birth.producer.join(".")}`;
 }
 
 function childSessionDir(scope: ChildSessionScope): string {
@@ -78,15 +90,16 @@ function childSessionDir(scope: ChildSessionScope): string {
 }
 
 /**
- * The child's own durable result: the memory of its last spine_child_return
- * across attempts, or null when no attempt returned. `latest` is the newest
- * attempt's session file, if any.
+ * The child's own durable result: the memory of the latest attempt that
+ * returned, or null when no attempt returned. `latest` is the newest attempt's
+ * session file, if any.
  */
 export async function readChildReturn(
   scope: ChildSessionScope,
-  producer: readonly number[],
+  birth: ChildBirthRef,
 ): Promise<{ memory: string | null; latest: { path: string; attempt: number } | null }> {
-  const pattern = new RegExp(`^${producer.join("\\.")}(?:\\.attempt-(\\d+))?\\.jsonl$`);
+  const stem = childSessionStem(birth).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(`^${stem}(?:\\.attempt-(\\d+))?\\.jsonl$`);
   let names: string[];
   try {
     names = await readdir(childSessionDir(scope));
@@ -100,13 +113,20 @@ export async function readChildReturn(
     .sort((left, right) => left.attempt - right.attempt);
   let memory: string | null = null;
   for (const attempt of attempts) {
-    memory = returnedMemory(await readFile(attempt.path, "utf8")) ?? memory;
+    const accepted = acceptedChildReturns(await readFile(attempt.path, "utf8"));
+    if (accepted.length === 1) memory = accepted[0]!;
   }
   return { memory, latest: attempts.at(-1) ?? null };
 }
 
-function returnedMemory(sessionJsonl: string): string | null {
-  let memory: string | null = null;
+/**
+ * The memories a child's session accepted as its typed return: each
+ * spine_child_return call whose own tool result succeeded. A call the
+ * child's admission blocked has an error result and returns nothing.
+ */
+export function acceptedChildReturns(sessionJsonl: string): string[] {
+  const calls = new Map<string, string>();
+  const accepted: string[] = [];
   for (const line of sessionJsonl.split("\n")) {
     if (line.trim().length === 0) continue;
     let entry: unknown;
@@ -116,18 +136,27 @@ function returnedMemory(sessionJsonl: string): string | null {
       continue;
     }
     const message = isRecord(entry) && entry.type === "message" && isRecord(entry.message) ? entry.message : null;
-    if (message === null || message.role !== "assistant" || !Array.isArray(message.content)) continue;
-    for (const item of message.content) {
-      if (
-        isRecord(item) && item.type === "toolCall" && item.name === CHILD_RETURN_TOOL &&
-        isRecord(item.arguments) && typeof item.arguments.memory === "string" &&
-        item.arguments.memory.trim().length > 0
-      ) {
-        memory = item.arguments.memory;
+    if (message === null) continue;
+    if (message.role === "assistant" && Array.isArray(message.content)) {
+      for (const item of message.content) {
+        if (
+          isRecord(item) && item.type === "toolCall" && item.name === CHILD_RETURN_TOOL &&
+          typeof item.id === "string" && isRecord(item.arguments) &&
+          typeof item.arguments.memory === "string" && item.arguments.memory.trim().length > 0
+        ) {
+          calls.set(item.id, item.arguments.memory);
+        }
       }
     }
+    if (
+      message.role === "toolResult" && message.toolName === CHILD_RETURN_TOOL &&
+      message.isError === false && typeof message.toolCallId === "string"
+    ) {
+      const memory = calls.get(message.toolCallId);
+      if (memory !== undefined) accepted.push(memory);
+    }
   }
-  return memory;
+  return accepted;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

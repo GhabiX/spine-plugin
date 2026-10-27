@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { appendFile, mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -9,7 +9,6 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import extension, {
   createPiExtension,
   createPiSpinePlugin,
-  extractTypedChildMemory,
   SPINE_CANONICAL_PLUGIN_MANIFEST,
 } from "../dist/pi/extension.js";
 import { createNodeSpineRuntime } from "@spinejit/spine-sdk/node";
@@ -829,20 +828,38 @@ test("a model request while the prior sampling is still open faults", async () =
   assert.match(faults[0].data.errors.at(-1).message, /before the prior turn ended/);
 });
 
-function childReturn(memory) {
-  return {
-    stdout: JSON.stringify({
-      type: "message_end",
-      message: {
-        role: "assistant",
-        content: [{ type: "toolCall", name: "spine_child_return", arguments: { memory } }],
-      },
-    }),
-    stderr: "",
-    code: 0,
-    killed: false,
-  };
+/** A child process that returned `memory`: Pi recorded the call and its result in the child's session. */
+async function childReturn(args, memory) {
+  await appendChildEntries(args[args.indexOf("--session") + 1], returnEntries(memory));
+  return { stdout: "", stderr: "", code: 0, killed: false };
 }
+
+async function appendChildEntries(path, messages) {
+  await appendFile(path, messages.map((message) => `${JSON.stringify({ type: "message", message })}\n`).join(""));
+}
+
+/** A child's typed return as Pi records it: the call, then its tool result. */
+function returnEntries(memory, isError = false) {
+  return [
+    {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "return-1", name: "spine_child_return", arguments: { memory } }],
+      api: "test", provider: "test", model: "test",
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+      stopReason: "toolUse",
+      timestamp: 2,
+    },
+    {
+      role: "toolResult",
+      toolCallId: "return-1",
+      toolName: "spine_child_return",
+      content: [{ type: "text", text: isError ? "blocked" : "Spine child memory accepted" }],
+      isError,
+      timestamp: 3,
+    },
+  ];
+}
+
 
 async function until(condition) {
   for (let tries = 0; !condition(); tries += 1) {
@@ -852,6 +869,9 @@ async function until(condition) {
 }
 
 /** Records what Pi would persist, in order, so a second extension can replay it. */
+let recordedEntries = 0;
+
+/** Pi entry ids are unique in a session, across its tree branches too. */
 function recordBranch(pi) {
   const branch = [];
   const emit = pi.emit.bind(pi);
@@ -861,14 +881,14 @@ function recordBranch(pi) {
     if (name === "message_end") {
       const message = structuredClone(event.message);
       branch.push(message.role === "custom"
-        ? { type: "custom_message", id: `e${branch.length}`, customType: message.customType, content: message.content, display: message.display, details: message.details }
-        : { type: "message", id: `e${branch.length}`, message });
+        ? { type: "custom_message", id: `e${recordedEntries++}`, customType: message.customType, content: message.content, display: message.display, details: message.details }
+        : { type: "message", id: `e${recordedEntries++}`, message });
     }
     return result;
   };
   const appendEntry = pi.api.appendEntry;
   pi.api.appendEntry = (customType, data) => {
-    branch.push({ type: "custom", id: `e${branch.length}`, customType, data: structuredClone(data) });
+    branch.push({ type: "custom", id: `e${recordedEntries++}`, customType, data: structuredClone(data) });
     appendEntry(customType, data);
   };
   return branch;
@@ -914,20 +934,19 @@ const SPAWN_TASKS = [{ summary: "alpha", prompt: "do alpha work" }, { summary: "
 test("Spawn returns at once; children start after the commit and each arrives on its own", async () => {
   const dir = await mkdtemp(join(tmpdir(), "pi-spine-spawn-live-"));
   const pi = mockPi();
-  const ctx = extensionContext("pi-live", {
-    sessionFile: join(dir, "parent.jsonl"),
-    branch: [{
-      type: "message",
-      id: "aaaaaaaa",
-      parentId: null,
-      timestamp: "2026-09-17T12:00:00.000Z",
-      message: { role: "user", content: "parent prefix TOKEN", timestamp: 1 },
-    }],
+  const branch = recordBranch(pi);
+  branch.push({
+    type: "message",
+    id: "aaaaaaaa",
+    parentId: null,
+    timestamp: "2026-09-17T12:00:00.000Z",
+    message: { role: "user", content: "parent prefix TOKEN", timestamp: 1 },
   });
+  const ctx = extensionContext("pi-live", { sessionFile: join(dir, "parent.jsonl"), branch });
   const invocations = [];
   pi.api.exec = async (command, args) => {
     invocations.push({ command, args });
-    return childReturn(args.at(-1).includes("You are: alpha") ? "alpha memory" : "beta memory");
+    return childReturn(args, args.at(-1).includes("You are: alpha") ? "alpha memory" : "beta memory");
   };
   createPiExtension()(pi.api);
   await pi.emit("session_start", { type: "session_start", reason: "new" }, ctx.context);
@@ -958,7 +977,8 @@ test("Spawn returns at once; children start after the commit and each arrives on
   assert.ok(alpha.args.includes(`--spine-parent-pid=${process.pid}`));
   assert.match(alpha.args.at(-1), /^- beta$/m);
   const sessionPath = alpha.args[alpha.args.indexOf("--session") + 1];
-  assert.equal(sessionPath, join(dir, "spine-spawn", "pi-live", "1.1.1.jsonl"));
+  const origin = branch.find((entry) => entry.message === spawnCall || entry.message?.content?.[0]?.id === spawn.id).id;
+  assert.equal(sessionPath, join(dir, "spine-spawn", "pi-live", `${origin}.1.1.1.jsonl`));
   assert.match(await readFile(sessionPath, "utf8"), /parent prefix TOKEN/);
 
   const arrivals = pi.sent.map(([message]) => message.details.arrival).sort((a, b) => a.producer.join(".").localeCompare(b.producer.join(".")));
@@ -1017,17 +1037,10 @@ test("after a restart a returned child is redelivered without running, an unretu
   await sample(pi, ctx, [{ id: "spawn-1", name: "spine_spawn", input: { tasks: SPAWN_TASKS } }]);
   await until(() => started === 2);
   // The parent dies before either arrival is admitted; alpha had written its return.
-  const alphaSession = SessionManager.open(join(dir, "spine-spawn", "pi-restart", "1.1.jsonl"), undefined, "/tmp");
-  alphaSession.appendMessage({
-    role: "assistant",
-    content: [{ type: "toolCall", id: "r", name: "spine_child_return", arguments: { memory: "alpha memory" } }],
-    api: "test", provider: "test", model: "test",
-    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-    stopReason: "toolUse",
-    timestamp: 5,
-  });
+  const origin = branch.find((entry) => entry.message?.content?.[0]?.id === "spawn-1").id;
+  await appendChildEntries(join(dir, "spine-spawn", "pi-restart", `${origin}.1.1.jsonl`), returnEntries("alpha memory"));
   await pi.emit("session_shutdown", { type: "session_shutdown", reason: "quit" }, ctx.context);
-  release(childReturn("too late"));
+  release({ stdout: "", stderr: "", code: 0, killed: false });
 
   const restarted = mockPi();
   restarted.api.exec = async () => {
@@ -1048,7 +1061,8 @@ test("after a restart a returned child is redelivered without running, an unretu
 
 test("Stop cancels running children; their aborted arrivals do not wake the agent", async () => {
   const pi = mockPi();
-  const ctx = extensionContext("pi-stop", { sessionFile: join(await mkdtemp(join(tmpdir(), "pi-spine-stop-")), "parent.jsonl") });
+  const branch = recordBranch(pi);
+  const ctx = extensionContext("pi-stop", { sessionFile: join(await mkdtemp(join(tmpdir(), "pi-spine-stop-")), "parent.jsonl"), branch });
   // Like pi.exec, an already-aborted signal kills at once.
   pi.api.exec = (_command, _args, options) => new Promise((resolve) => {
     const killed = () => resolve({ stdout: "", stderr: "terminated", code: 143, killed: true });
@@ -1068,12 +1082,136 @@ test("Stop cancels running children; their aborted arrivals do not wake the agen
   }
 });
 
+test("the same birth id on two Pi tree branches names two children", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-spine-spawn-branches-"));
+  const sessionFile = join(dir, "parent.jsonl");
+  const tasks = (tag) => [{ summary: `${tag}1`, prompt: `${tag} first` }, { summary: `${tag}2`, prompt: `${tag} second` }];
+  const exec = async (_command, args) => childReturn(args, args.at(-1).includes("You are: A") ? "A result" : "B result");
+  async function open(prefix) {
+    const pi = mockPi();
+    const branch = recordBranch(pi);
+    branch.push(...structuredClone(prefix));
+    const ctx = extensionContext("pi-branches", { sessionFile, branch });
+    pi.api.exec = exec;
+    createPiExtension()(pi.api);
+    await pi.emit("session_start", { type: "session_start", reason: "resume" }, ctx.context);
+    return { pi, ctx, branch };
+  }
+  const a = await open([]);
+  await a.pi.emit("message_end", { type: "message_end", message: user("base") }, a.ctx.context);
+  const base = structuredClone(a.branch);
+  await sample(a.pi, a.ctx, [{ id: "spawn-A", name: "spine_spawn", input: { tasks: tasks("A") } }]);
+  await until(() => a.pi.sent.length === 2);
+  const branchA = structuredClone(a.branch);
+  await a.pi.emit("session_shutdown", { type: "session_shutdown", reason: "quit" }, a.ctx.context);
+
+  // Branch B continues the same session from before A's Spawn; its births are 1.1 and 1.2 too.
+  const b = await open(base);
+  await sample(b.pi, b.ctx, [{ id: "spawn-B", name: "spine_spawn", input: { tasks: tasks("B") } }]);
+  await until(() => b.pi.sent.length === 2);
+  await b.pi.emit("session_shutdown", { type: "session_shutdown", reason: "quit" }, b.ctx.context);
+
+  // Back on A, recovery reads A's children, not B's.
+  const resumed = await open(branchA);
+  await until(() => resumed.pi.sent.length === 2);
+  assert.deepEqual(resumed.pi.sent.map(([message]) => message.details.arrival.memory), ["A result", "A result"]);
+});
+
+test("a spawned child inherits its parent's unarrived births as context, not as its own children", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-spine-spawn-inherit-"));
+  const parent = mockPi();
+  const parentBranch = recordBranch(parent);
+  const parentCtx = extensionContext("pi-inherit", { sessionFile: join(dir, "parent.jsonl"), branch: parentBranch });
+  const runs = [];
+  parent.api.exec = (_command, args) => new Promise((resolve) => runs.push({ resolve, args }));
+  createPiExtension()(parent.api);
+  await parent.emit("session_start", { type: "session_start", reason: "new" }, parentCtx.context);
+  await parent.emit("message_end", { type: "message_end", message: user("request") }, parentCtx.context);
+  await sample(parent, parentCtx, [{ id: "spawn-1", name: "spine_spawn", input: { tasks: SPAWN_TASKS } }]);
+  await until(() => runs.length === 2);
+  // A second Spawn while the first two children run: its children see 1.1 and 1.2 unarrived.
+  await sample(parent, parentCtx, [{ id: "spawn-2", name: "spine_spawn", input: { tasks: SPAWN_TASKS } }]);
+  await until(() => runs.length === 4);
+
+  const childPath = runs[2].args[runs[2].args.indexOf("--session") + 1];
+  const entries = (await readFile(childPath, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+  const child = mockPi();
+  child.setChildFlag(true);
+  child.api.exec = async () => {
+    throw new Error("a child must not run its parent's children");
+  };
+  const childBranch = recordBranch(child);
+  childBranch.push(...entries.slice(1));
+  const childCtx = extensionContext(entries[0].id, { sessionFile: childPath, branch: childBranch });
+  childCtx.context.hasUI = false;
+  createPiExtension()(child.api);
+  await child.emit("session_start", { type: "session_start", reason: "new" }, childCtx.context);
+  await child.emit("message_end", { type: "message_end", message: user("child assignment") }, childCtx.context);
+  const done = await sample(child, childCtx, [{ id: "return-1", name: "spine_child_return", input: { memory: "child memory" } }]);
+  assert.equal(done.admissions[0], undefined);
+  assert.equal(child.sent.length, 0);
+  assert.equal(childCtx.aborts, 0);
+  await child.emit("session_shutdown", { type: "session_shutdown", reason: "quit" }, childCtx.context);
+  await parent.emit("session_shutdown", { type: "session_shutdown", reason: "quit" }, parentCtx.context);
+  for (const run of runs) run.resolve({ stdout: "", stderr: "stopped", code: 143, killed: true });
+});
+
+test("a return the child's admission blocked is not its result", async () => {
+  const pi = mockPi();
+  const branch = recordBranch(pi);
+  const ctx = extensionContext("pi-blocked-return", { sessionFile: join(await mkdtemp(join(tmpdir(), "pi-spine-blocked-")), "parent.jsonl"), branch });
+  pi.api.exec = async (_command, args) => {
+    await appendChildEntries(args[args.indexOf("--session") + 1], returnEntries("premature", true));
+    return { stdout: "", stderr: "", code: 0, killed: false };
+  };
+  createPiExtension()(pi.api);
+  await pi.emit("session_start", { type: "session_start", reason: "new" }, ctx.context);
+  await pi.emit("message_end", { type: "message_end", message: user("request") }, ctx.context);
+  await sample(pi, ctx, [{ id: "spawn-1", name: "spine_spawn", input: { tasks: SPAWN_TASKS } }]);
+  await until(() => pi.sent.length === 2);
+  for (const [message] of pi.sent) {
+    assert.equal(message.details.arrival.outcome, "errored");
+    assert.match(message.details.arrival.diagnostic, /accepted 0 typed returns/);
+  }
+});
+
+test("after a Stop the arrivals Pi dropped are handed over again and admitted once", async () => {
+  const pi = mockPi();
+  const branch = recordBranch(pi);
+  const ctx = extensionContext("pi-redeliver", { sessionFile: join(await mkdtemp(join(tmpdir(), "pi-spine-redeliver-")), "parent.jsonl"), branch });
+  pi.api.exec = async (_command, args) => childReturn(args, args.at(-1).includes("You are: alpha") ? "alpha memory" : "beta memory");
+  createPiExtension()(pi.api);
+  await pi.emit("session_start", { type: "session_start", reason: "new" }, ctx.context);
+  await pi.emit("message_end", { type: "message_end", message: user("request") }, ctx.context);
+  await sample(pi, ctx, [{ id: "spawn-1", name: "spine_spawn", input: { tasks: SPAWN_TASKS } }]);
+  await until(() => pi.sent.length === 2);
+  // Pi queued both as steering messages; a Stop clears that queue.
+  await pi.emit("agent_settled", { type: "agent_settled", aborted: true }, ctx.context);
+  assert.equal(pi.sent.length, 4);
+  assert.deepEqual(pi.sent.slice(2).map(([, options]) => options), [
+    { deliverAs: "steer", triggerTurn: false },
+    { deliverAs: "steer", triggerTurn: false },
+  ]);
+  // Had one copy survived, both reach the source: the core admits an arrival once.
+  for (const [message] of pi.sent) {
+    await pi.emit("message_end", { type: "message_end", message }, ctx.context);
+  }
+  await sample(pi, ctx, [{ id: "open-1", name: "spine_open", input: { goal: "use results" } }]);
+  assert.equal(ctx.aborts, 0);
+  const after = contents((await pi.emit("context", { type: "context", messages: [] }, ctx.context)).messages);
+  assert.equal(after.filter((text) => /<spine_arrival node_id="1\.1" outcome="completed">/.test(text)).length, 1);
+  // Once admitted, nothing is held any more.
+  await pi.emit("agent_settled", { type: "agent_settled", aborted: true }, ctx.context);
+  assert.equal(pi.sent.length, 4);
+});
+
 test("without a UI the settled agent waits for a running child, whose arrival starts the next turn", async () => {
   const pi = mockPi();
-  const ctx = extensionContext("pi-print", { sessionFile: join(await mkdtemp(join(tmpdir(), "pi-spine-print-")), "parent.jsonl") });
+  const branch = recordBranch(pi);
+  const ctx = extensionContext("pi-print", { sessionFile: join(await mkdtemp(join(tmpdir(), "pi-spine-print-")), "parent.jsonl"), branch });
   ctx.context.hasUI = false;
   const gates = [];
-  pi.api.exec = () => new Promise((resolve) => gates.push(resolve));
+  pi.api.exec = (_command, args) => new Promise((resolve) => gates.push({ resolve, args }));
   createPiExtension()(pi.api);
   await pi.emit("session_start", { type: "session_start", reason: "new" }, ctx.context);
   await pi.emit("message_end", { type: "message_end", message: user("request") }, ctx.context);
@@ -1083,7 +1221,7 @@ test("without a UI the settled agent waits for a running child, whose arrival st
   const waiting = pi.emit("agent_settled", { type: "agent_settled", aborted: false }, ctx.context).then(() => { settled = true; });
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.equal(settled, false);
-  gates[0](childReturn("first memory"));
+  gates[0].resolve(await childReturn(gates[0].args, "first memory"));
   await waiting;
   assert.equal(pi.sent.length, 1);
   assert.deepEqual(pi.sent[0][1], { deliverAs: "steer", triggerTurn: true });
@@ -1091,7 +1229,8 @@ test("without a UI the settled agent waits for a running child, whose arrival st
 
 test("a child that cannot start arrives as errored without faulting the parent; compaction waits for it", async () => {
   const pi = mockPi();
-  const ctx = extensionContext("pi-reject", { sessionFile: join(await mkdtemp(join(tmpdir(), "pi-spine-reject-")), "parent.jsonl") });
+  const branch = recordBranch(pi);
+  const ctx = extensionContext("pi-reject", { sessionFile: join(await mkdtemp(join(tmpdir(), "pi-spine-reject-")), "parent.jsonl"), branch });
   pi.api.exec = async () => {
     throw new Error("host transport failure");
   };
@@ -2124,24 +2263,6 @@ test("Pi custom compaction summarizes, durably barriers, and publishes replaceme
   assert.deepEqual(context.messages[1], kept);
 });
 
-test("typed child-memory extraction rejects prose and duplicate returns", () => {
-  const event = JSON.stringify({
-    type: "message_end",
-    message: {
-      role: "assistant",
-      content: [
-        {
-          type: "toolCall",
-          name: "spine_child_return",
-          arguments: { memory: "bounded child memory" },
-        },
-      ],
-    },
-  });
-  assert.equal(extractTypedChildMemory(`not-json\n${event}\n`), "bounded child memory");
-  assert.throws(() => extractTypedChildMemory("plain final answer"), /0 typed terminal memories/);
-  assert.throws(() => extractTypedChildMemory(`${event}\n${event}`), /2 typed terminal memories/);
-});
 
 
 test("optional browser connects synchronously and core invalidates it on session shutdown", async () => {

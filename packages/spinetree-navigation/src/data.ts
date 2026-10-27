@@ -1,6 +1,6 @@
 import type { MemorySlot, NodeSnapshot } from "@spinejit/spine-sdk";
 import type { SpineTreeSnapshot } from "@spinejit/pi-spinejit/pi/tree-view";
-import type { SpineTreeSpawnOutcome } from "@spinejit/pi-spinejit/pi/tree-style";
+import { spineTreeSpawnOutcome, type SpineTreeSpawnState } from "@spinejit/pi-spinejit/pi/tree-style";
 
 export interface NavigationNode {
   id: string;
@@ -9,7 +9,7 @@ export interface NavigationNode {
   summary: string;
   status: NodeSnapshot["status"];
   kind: NodeSnapshot["kind"];
-  spawnOutcome: SpineTreeSpawnOutcome | null;
+  spawn: SpineTreeSpawnState | null;
 }
 export interface NavigationData {
   nodes: readonly NavigationNode[];
@@ -27,7 +27,7 @@ export function createNavigationData(snapshot: SpineTreeSnapshot): NavigationDat
     id: id(node.id), parent: node.parent === null ? null : id(node.parent),
     children: node.children.map(id), summary: node.summary ?? (node.kind === "RootEpoch" ? "Session epoch" : "Task"),
     status: node.status, kind: node.kind,
-    spawnOutcome: node.spawn_outcome,
+    spawn: node.spawn,
   }));
   return {
     nodes, cursor: id(snapshot.cursor),
@@ -62,7 +62,8 @@ function slotText(slot: MemorySlot, nodes: ReadonlyMap<string, NodeSnapshot>): s
   }
   if ("Birth" in slot) {
     const b = slot.Birth;
-    const outcome = nodes.get(id(b.owner_node))?.spawn_outcome ?? "running";
+    const spawn = nodes.get(id(b.owner_node))?.spawn ?? null;
+    const outcome = spawn === "inherited" ? "inherited" : spineTreeSpawnOutcome(spawn) ?? "running";
     return `### Spawn · ${id(b.owner_node)} · ${outcome}\n\n${b.task.summary}\n\n${b.task.prompt}`;
   }
   if ("Arrival" in slot) {

@@ -70,7 +70,7 @@ test('real runtime Open/Next/Spawn/compact map to navigable nodes and memory', a
     await f.arrive('a');
     await f.arrive('a-peer');
     await f.step([spawn('b')]);
-    assert.equal(f.data().nodes.find(n => n.summary === 'b').spawnOutcome, null);
+    assert.equal(f.data().nodes.find(n => n.summary === 'b').spawn, 'pending');
     assert.match(f.data().memoryText(f.data().nodes.find(n => n.summary === 'b').id), /running/);
     await f.arrive('b', 'errored');
     await f.arrive('b-peer');
@@ -80,7 +80,7 @@ test('real runtime Open/Next/Spawn/compact map to navigable nodes and memory', a
     await f.step([{ type: 'open', summary: 'after compact' }]);
     const data = f.data();
     assert.deepEqual(data.nodes.filter(n => n.kind === 'Task').map(n => n.summary), ['research', 'implement', 'after compact']);
-    assert.deepEqual(data.nodes.filter(n => n.kind === 'Spawn').map(n => [n.summary, n.spawnOutcome]), [['a', 'completed'], ['a-peer', 'completed'], ['b', 'errored'], ['b-peer', 'completed']]);
+    assert.deepEqual(data.nodes.filter(n => n.kind === 'Spawn').map(n => [n.summary, n.spawn]), [['a', { arrived: 'completed' }], ['a-peer', { arrived: 'completed' }], ['b', { arrived: 'errored' }], ['b-peer', { arrived: 'completed' }]]);
     assert.deepEqual(data.memorySections('1.1'), ['Research findings']);
     assert.equal(data.memoryText('1.1'), 'Research findings');
     const b = data.nodes.find(n => n.summary === 'b');

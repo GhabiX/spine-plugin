@@ -3,8 +3,8 @@
   "package": "spine-core",
   "version": "0.5.0",
   "repository": "https://github.com/GhabiX/SpineCodex.git",
-  "revision": "9d48e36ef5b7c0082ac0d02730ecd9497ef444f8",
+  "revision": "6037a32f5a82147e5d8f820c53fd39ac5c8bf5dc",
   "subdirectory": "codex-rs/spine-core",
   "inherited": ["codex-rs/Cargo.toml", "codex-rs/rust-toolchain.toml"],
-  "developmentPath": "../codex-home/codex/codex-rs/spine-core"
+  "developmentPath": "../../tasks/spine_arrivals_core_20261027_1840/worktree/codex-rs/spine-core"
 }

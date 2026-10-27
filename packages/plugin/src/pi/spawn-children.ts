@@ -2,23 +2,27 @@ import type { SpawnArrival, SpawnTask, SpineProjection } from "@spinejit/spine-s
 
 import { toArrival } from "../spawn.js";
 
-/** A committed birth: the child's id and the task it was given. */
+/** A committed birth: the child's id, the task it was given, and where its sampling starts. */
 export interface PiSpawnBirth {
   producer: number[];
   task: SpawnTask;
+  start: number;
 }
 
-/** Births inside `scope` (a node id prefix; empty = all) whose arrival is not admitted. */
+/**
+ * Births inside `scope` (a node id prefix; empty = all) this session still has
+ * to join. Inherited births are joined by the session that bore them.
+ */
 export function unarrivedBirths(projection: SpineProjection, scope: readonly number[] = []): PiSpawnBirth[] {
   return projection.nodes
-    .filter((node) => node.kind === "Spawn" && node.spawn_outcome === null &&
+    .filter((node) => node.spawn === "pending" &&
       scope.every((part, index) => node.id[index] === part))
     .map((node) => {
       const slot = node.memory?.[0];
       if (slot === undefined || !("Birth" in slot)) {
         throw new Error(`Spine birth ${node.id.join(".")} has no birth record`);
       }
-      return { producer: [...node.id], task: slot.Birth.task };
+      return { producer: [...node.id], task: slot.Birth.task, start: node.start };
     });
 }
 
@@ -35,13 +39,13 @@ interface ChildRun {
 
 /**
  * The children one parent session owns. A child is tracked from launch until
- * its arrival is handed over, and then remembered as delivered, so a birth is
- * never started twice while its arrival waits to be admitted.
+ * its arrival is admitted: after the run ends its arrival is held, so a birth
+ * is never started twice and an arrival Pi dropped can be handed over again.
  */
 export class PiSpawnChildren {
   readonly #deliver: DeliverArrival;
   readonly #runs = new Map<string, ChildRun>();
-  readonly #delivered = new Set<string>();
+  readonly #handed = new Map<string, SpawnArrival>();
   #waiters: (() => void)[] = [];
 
   constructor(deliver: DeliverArrival) {
@@ -76,7 +80,7 @@ export class PiSpawnChildren {
       .then((arrival) => {
         this.#runs.delete(key);
         if (!run.disposed) {
-          this.#delivered.add(key);
+          this.#handed.set(key, arrival);
           this.#deliver(arrival, run.wake);
         }
         this.#notify();
@@ -87,8 +91,23 @@ export class PiSpawnChildren {
   redeliver(arrival: SpawnArrival): void {
     const key = arrival.producer.join(".");
     if (this.#tracked(arrival.producer)) return;
-    this.#delivered.add(key);
+    this.#handed.set(key, arrival);
     this.#deliver(arrival, false);
+  }
+
+  /**
+   * The agent settled. Arrivals whose births are no longer pending were
+   * admitted and are forgotten. After a Stop, Pi drops queued steering
+   * messages, so the rest are handed over again without waking the agent;
+   * the core admits a repeated arrival once.
+   */
+  settle(pending: readonly PiSpawnBirth[], aborted: boolean): void {
+    const open = new Set(pending.map((birth) => birth.producer.join(".")));
+    for (const key of [...this.#handed.keys()]) {
+      if (!open.has(key)) this.#handed.delete(key);
+    }
+    if (!aborted) return;
+    for (const arrival of this.#handed.values()) this.#deliver(arrival, false);
   }
 
   /** User Stop: cancel every child; the aborted arrivals do not wake the agent. */
@@ -116,7 +135,7 @@ export class PiSpawnChildren {
 
   #tracked(producer: readonly number[]): boolean {
     const key = producer.join(".");
-    return this.#runs.has(key) || this.#delivered.has(key);
+    return this.#runs.has(key) || this.#handed.has(key);
   }
 
   #notify(): void {
