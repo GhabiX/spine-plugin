@@ -1,6 +1,6 @@
 {
   "name": "@spinejit/pi-spinejit",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "license": "Apache-2.0",
   "author": "GhabiX",
@@ -40,7 +40,7 @@
       "types": "./dist/pi/extension.d.ts",
       "import": "./dist/pi/extension.js"
     },
-      "./pi/tree-style": {
+    "./pi/tree-style": {
       "types": "./dist/pi/tree-style.d.ts",
       "import": "./dist/pi/tree-style.js"
     },
