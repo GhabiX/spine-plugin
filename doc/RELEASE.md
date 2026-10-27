@@ -158,7 +158,9 @@ transfer to the new name. For subsequent OIDC releases configure
 `@spinejit/pi-spinejit` with GitHub owner `GhabiX`, repository `spine-plugin`,
 and workflow `publish.yml`. The repository was renamed from `spine-sdk-plugin`
 on 2026-10-27; update any Trusted Publisher entry that still names the old
-repository before the next OIDC release.
+repository before the next OIDC release. The Trusted Publisher grants only
+`npm stage publish`, so `publish.yml` stages the version; a maintainer then
+approves it with 2FA on npmjs.com or with `npm stage approve <stage-id>`.
 
 After publishing and verifying the new package, mark the old version deprecated:
 

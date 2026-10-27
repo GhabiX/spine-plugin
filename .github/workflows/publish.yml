@@ -42,4 +42,4 @@ jobs:
 
       - name: Publish selected package
         working-directory: packages/${{ inputs.package }}
-        run: npm publish --access public
+        run: npm stage publish . --access public
