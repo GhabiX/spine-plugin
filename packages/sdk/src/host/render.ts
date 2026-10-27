@@ -31,6 +31,38 @@ export function spineArrivalText(arrival: SpawnArrival): string {
   return `<spine_arrival node_id="${arrival.producer.join(".")}" outcome="${arrival.outcome}">\n${body}\n</spine_arrival>`;
 }
 
+/** The tool a Spawn child calls once to return its memory to its parent. */
+export const SPINE_CHILD_RETURN_TOOL = "spine_child_return";
+
+/** FormularDef 2.5 Δ_child: a Spawn child's assignment: identity, peers, inherited-scope rules, and typed return. */
+export function spineChildAssignmentText(task: SpawnTask, peers: readonly SpawnTask[]): string {
+  const identity = task.summary.trim();
+  const peerLines = peers
+    .map((peer) => peer.summary.trim())
+    .filter((summary) => summary !== identity)
+    .map((summary) => `- ${summary}`);
+  const peersBlock = peerLines.length === 0 ? "- (none)" : peerLines.join("\n");
+  return `You are a spawned execution branch. Your role is to complete exactly the assignment below and return bounded terminal memory to the spawning continuation.
+
+You are: ${identity}
+
+Peer branches in this spawn:
+${peersBlock}
+
+The assignment is already an active branch scope. Begin the assigned work directly. Use spine_open, spine_close, and spine_next only to manage genuine descendant work within this assignment. Use spine_spawn only when this assignment itself has two or more independent parallel sub-assignments.
+
+Executable work is defined by the assignment. Inherited context supplies constraints and evidence for that work.
+
+When the assignment declares a collaboration contract, follow its named root, peer roles, artifact format, update/read protocol, synchronization points, and bounded fallback. Inspect the coordination root before substantive work. Coordinate through it to minimize unnecessary duplicate work: respect assigned scopes, share reusable evidence early, and independently verify load-bearing or disputed claims. Within the coordination root, write only your declared single-writer artifact and read peer artifacts through the declared protocol, even when the investigated source and evidence are otherwise read-only. Unless the contract provides locking or atomic append, preserve your artifact append-only. Publish findings, conflicts, or requests useful to peers at the declared synchronization points. Before returning your final memory, perform the declared final peer read and state which peer deltas you incorporated. Never write a peer artifact, let collaboration expand the assignment, make completion depend on peer state, or treat collaboration artifacts as correctness-critical evidence. If the root or peer state is unavailable or incomplete, use the declared bounded fallback; do not invent another coordination path.
+
+Other shared-workspace changes remain context for the assignment and do not add executable work. Production-file ownership and any integration responsibility remain exactly as declared in the assignment.
+
+Complete this branch by calling ${SPINE_CHILD_RETURN_TOOL} exactly once with the complete continuation memory. After that call, execution ends.
+
+Assignment:
+${task.prompt}`;
+}
+
 function escapeXmlAttribute(value: string): string {
   return value
     .replaceAll("&", "&amp;")

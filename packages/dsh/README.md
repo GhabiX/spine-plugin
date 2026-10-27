@@ -38,10 +38,25 @@ loads it as the Cordis plugin `spinejit`.
   next request, step or turn, as it did live, or at the end of the log. A
   session whose conversation started without this plugin is refused: its user
   messages carry no `[U#]`.
+- Spawn: each child is a subagent in the same world, forked from its parent's
+  log just before the sampling whose Spawn bore it (session id
+  `<parent>:spawn:<node>`). It gets its assignment as a user message and ends
+  by calling `spine_child_return` once, after its own children have arrived.
+  A child is judged each time it goes idle: returned is completed, cancelled
+  by its parent is aborted, and idle with every child of its own joined but
+  no return is errored.
+- An arrival is a user message the parent receives once, while its birth is
+  open; it wakes the parent unless the parent was stopped. Stopping the
+  parent stops its children, whose aborted arrivals wait for the next turn. A
+  Close or Next in the sampling that sees the last arrival is accepted: the
+  commit joins the arrival first. A restarted parent receives a child that
+  returned as completed and any other open birth as aborted, without waking.
+- A forked session's inherited prefix is its parent's namespace: births the
+  parent made there stay the parent's to join.
 
 ## Not yet
 
-- Spawn is not enabled. Forked sessions are not handled.
+- A Spawn child that fails is not retried or continued; its arrival says why.
 - Spine tools must be called by the model directly, not from code (PTC).
 - Plugins that rewrite conversation context (compaction, tool-result pruning,
   image offload) must not be loaded with this one. Spine owns the context; a

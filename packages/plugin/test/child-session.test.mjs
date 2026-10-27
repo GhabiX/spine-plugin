@@ -5,10 +5,9 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { spineChildAssignmentText } from "@spinejit/spine-sdk/host";
 
 import {
-  buildChildAssignment,
-  CHILD_RETURN_TOOL,
   buildChildContinuation,
   acceptedChildReturns,
   childSessionPath,
@@ -17,27 +16,6 @@ import {
   readChildSessionIdentity,
   writeChildPrefixSession,
 } from "../dist/pi/child-session.js";
-
-test("child assignment names identity, peers, descendant tools, and typed return", () => {
-  const text = buildChildAssignment(
-    { summary: "ALPHA", prompt: "return TOKEN_A" },
-    [
-      { summary: "ALPHA", prompt: "return TOKEN_A" },
-      { summary: "BETA", prompt: "return TOKEN_B" },
-    ],
-  );
-  assert.match(text, /You are: ALPHA/);
-  assert.match(text, /^- BETA$/m);
-  assert.doesNotMatch(text, /^- ALPHA$/m);
-  assert.match(text, /already an active branch scope/);
-  assert.match(text, /spine_open/);
-  assert.match(text, /spine_close/);
-  assert.match(text, /spine_next/);
-  assert.match(text, /spine_spawn/);
-  assert.match(text, /independent parallel sub-assignments/);
-  assert.match(text, new RegExp(`${CHILD_RETURN_TOOL} exactly once`));
-  assert.match(text, /Assignment:\nreturn TOKEN_A$/);
-});
 
 test("written prefix session is a Pi-openable fork of the parent branch", async () => {
   const dest = join(await mkdtemp(join(tmpdir(), "pi-spine-prefix-")), "child.jsonl");
@@ -146,7 +124,7 @@ test("child continuation preserves the active session and optional guidance", ()
 
 test("child session inspection detects durable assignment context", async () => {
   const dest = join(await mkdtemp(join(tmpdir(), "pi-spine-inspect-")), "child.jsonl");
-  const assignment = buildChildAssignment(
+  const assignment = spineChildAssignmentText(
     { summary: "ALPHA", prompt: "return TOKEN_A" },
     [{ summary: "ALPHA", prompt: "return TOKEN_A" }],
   );

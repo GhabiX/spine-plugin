@@ -10,47 +10,10 @@ import {
   type SessionEntry,
 } from "@earendil-works/pi-coding-agent";
 
+import { SPINE_CHILD_RETURN_TOOL } from "@spinejit/spine-sdk/host";
+
 import { buildPiReplayPlan } from "./recovery.js";
 import type { PiAgentMessage } from "./messages.js";
-
-export const CHILD_RETURN_TOOL = "spine_child_return";
-
-export interface ChildAssignmentTask {
-  summary: string;
-  prompt: string;
-}
-
-/** FormularDef 2.5 Δ_child: identity, peers, inherited-scope rules, and typed return. */
-export function buildChildAssignment(
-  task: ChildAssignmentTask,
-  peers: readonly ChildAssignmentTask[],
-): string {
-  const identity = task.summary.trim();
-  const peerLines = peers
-    .map((peer) => peer.summary.trim())
-    .filter((summary) => summary !== identity)
-    .map((summary) => `- ${summary}`);
-  const peersBlock = peerLines.length === 0 ? "- (none)" : peerLines.join("\n");
-  return `You are a spawned execution branch. Your role is to complete exactly the assignment below and return bounded terminal memory to the spawning continuation.
-
-You are: ${identity}
-
-Peer branches in this spawn:
-${peersBlock}
-
-The assignment is already an active branch scope. Begin the assigned work directly. Use spine_open, spine_close, and spine_next only to manage genuine descendant work within this assignment. Use spine_spawn only when this assignment itself has two or more independent parallel sub-assignments.
-
-Executable work is defined by the assignment. Inherited context supplies constraints and evidence for that work.
-
-When the assignment declares a collaboration contract, follow its named root, peer roles, artifact format, update/read protocol, synchronization points, and bounded fallback. Inspect the coordination root before substantive work. Coordinate through it to minimize unnecessary duplicate work: respect assigned scopes, share reusable evidence early, and independently verify load-bearing or disputed claims. Within the coordination root, write only your declared single-writer artifact and read peer artifacts through the declared protocol, even when the investigated source and evidence are otherwise read-only. Unless the contract provides locking or atomic append, preserve your artifact append-only. Publish findings, conflicts, or requests useful to peers at the declared synchronization points. Before returning your final memory, perform the declared final peer read and state which peer deltas you incorporated. Never write a peer artifact, let collaboration expand the assignment, make completion depend on peer state, or treat collaboration artifacts as correctness-critical evidence. If the root or peer state is unavailable or incomplete, use the declared bounded fallback; do not invent another coordination path.
-
-Other shared-workspace changes remain context for the assignment and do not add executable work. Production-file ownership and any integration responsibility remain exactly as declared in the assignment.
-
-Complete this branch by calling ${CHILD_RETURN_TOOL} exactly once with the complete continuation memory. After that call, execution ends.
-
-Assignment:
-${task.prompt}`;
-}
 
 export interface ChildSessionScope {
   /** The parent Pi session id; birth ids are unique only within it. */
@@ -140,7 +103,7 @@ export function acceptedChildReturns(sessionJsonl: string): string[] {
     if (message.role === "assistant" && Array.isArray(message.content)) {
       for (const item of message.content) {
         if (
-          isRecord(item) && item.type === "toolCall" && item.name === CHILD_RETURN_TOOL &&
+          isRecord(item) && item.type === "toolCall" && item.name === SPINE_CHILD_RETURN_TOOL &&
           typeof item.id === "string" && isRecord(item.arguments) &&
           typeof item.arguments.memory === "string" && item.arguments.memory.trim().length > 0
         ) {
@@ -149,7 +112,7 @@ export function acceptedChildReturns(sessionJsonl: string): string[] {
       }
     }
     if (
-      message.role === "toolResult" && message.toolName === CHILD_RETURN_TOOL &&
+      message.role === "toolResult" && message.toolName === SPINE_CHILD_RETURN_TOOL &&
       message.isError === false && typeof message.toolCallId === "string"
     ) {
       const memory = calls.get(message.toolCallId);
@@ -256,7 +219,7 @@ export function buildChildContinuation(guidance?: string, fallbackAssignment?: s
     ? ""
     : `\n\nThe original assignment was not present in the active session context. Use the following only to restore task context; inspect the existing state first and do not repeat work that is already complete.\n\nAssignment context:\n${fallbackAssignment}`;
   const note = guidance === undefined ? "" : `\n\nUser guidance:\n${guidance}`;
-  return `The previous execution attempt did not complete the assigned work. Continue the same active branch from the existing session history. Inspect the current state, finish the assignment, and call ${CHILD_RETURN_TOOL} exactly once with the complete terminal memory. Do not start a new branch or repeat work that is already complete.${fallback}${note}`;
+  return `The previous execution attempt did not complete the assigned work. Continue the same active branch from the existing session history. Inspect the current state, finish the assignment, and call ${SPINE_CHILD_RETURN_TOOL} exactly once with the complete terminal memory. Do not start a new branch or repeat work that is already complete.${fallback}${note}`;
 }
 
 function sessionEntryContainsText(entry: SessionEntry, text: string): boolean {

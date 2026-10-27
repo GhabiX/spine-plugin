@@ -42,10 +42,8 @@ import { watchParent } from "./parent-watch.js";
 import type { SpawnArrival, SpawnTask, SpineProjection } from "@spinejit/spine-sdk";
 import {
   acceptedChildReturns,
-  buildChildAssignment,
   buildChildContinuation,
   childSessionPath,
-  CHILD_RETURN_TOOL,
   inspectChildSession,
   readChildReturn,
   readChildSessionIdentity,
@@ -84,6 +82,8 @@ import {
   childReturnRefusal,
   formatBirths,
   SpawnChildren,
+  SPINE_CHILD_RETURN_TOOL,
+  spineChildAssignmentText,
   spineToolRefusal,
   unarrivedBirths,
   type SpawnBirth,
@@ -406,18 +406,18 @@ function loadCanonicalSpineTools(configToml: string): Array<{
 
 function childActiveTools(pi: ExtensionAPI): string[] {
   return [
-    ...pi.getActiveTools().filter((name) => name !== CHILD_RETURN_TOOL),
-    CHILD_RETURN_TOOL,
+    ...pi.getActiveTools().filter((name) => name !== SPINE_CHILD_RETURN_TOOL),
+    SPINE_CHILD_RETURN_TOOL,
   ];
 }
 
 function childToolAllowlist(pi: ExtensionAPI): string[] {
-  return [...new Set([...pi.getActiveTools(), CHILD_RETURN_TOOL].filter((name) => name.trim().length > 0))];
+  return [...new Set([...pi.getActiveTools(), SPINE_CHILD_RETURN_TOOL].filter((name) => name.trim().length > 0))];
 }
 
 function registerChildReturnTool(pi: ExtensionAPI, exposure: "direct" | "hidden" = "direct"): void {
   pi.registerTool({
-    name: CHILD_RETURN_TOOL,
+    name: SPINE_CHILD_RETURN_TOOL,
     exposure,
     label: "Return Spine Memory",
     description: "Return the complete model-authored terminal memory for this Spawn child.",
@@ -576,8 +576,8 @@ function registerLifecycleHandlers(
   pi.on("tool_call", async (event, ctx) => {
     if (slot.mode !== "sdk") return;
     try {
-      const admission = childReturnAdmission(slot, event.toolName) ??
-        controlToolAdmission(slot, event.toolName, event.input);
+      const admission = childReturnAdmission(slot, ctx, event.toolName) ??
+        controlToolAdmission(slot, ctx, event.toolName, event.input);
       if (admission !== undefined) return admission;
       await (await requireSession(slot)).lifecycle.registerToolCall(
         event.toolCallId,
@@ -1053,7 +1053,7 @@ async function executePiChild(
   const destPath = childSessionPath(scope, birth, child.attempt);
   let sessionId: string;
   let prompt: string;
-  const assignment = buildChildAssignment(task, peers);
+  const assignment = spineChildAssignmentText(task, peers);
   if (child.mode === "initial" || child.mode === "retry") {
     if (prefix === null) throw new Error(`Pi Spawn child ${producer} has no birth context to start from`);
     sessionId = await writeChildPrefixSession({
@@ -1156,6 +1156,7 @@ const CONTROL_TOOLS = ["spine_open", "spine_close", "spine_next"] as const;
 
 function controlToolAdmission(
   slot: MutableSessionSlot,
+  ctx: ExtensionContext,
   toolName: string,
   input: Record<string, unknown>,
 ): { block: true; reason: string } | undefined {
@@ -1167,17 +1168,22 @@ function controlToolAdmission(
     return { block: true, reason: `Spine durability is faulted: ${detail}` };
   }
   if (slot.current === null) return undefined;
-  const reason = spineToolRefusal(slot.current.latestContext.projection, toolName as (typeof CONTROL_TOOLS)[number]);
+  const reason = spineToolRefusal(
+    slot.current.latestContext.projection,
+    toolName as (typeof CONTROL_TOOLS)[number],
+    enteredArrivals(ctx),
+  );
   return reason === null ? undefined : { block: true, reason };
 }
 
 /** A child returns its memory only after its own spawned children have arrived. */
 function childReturnAdmission(
   slot: MutableSessionSlot,
+  ctx: ExtensionContext,
   toolName: string,
 ): { block: true; reason: string } | undefined {
-  if (toolName !== CHILD_RETURN_TOOL || slot.current === null) return undefined;
-  const reason = childReturnRefusal(slot.current.latestContext.projection);
+  if (toolName !== SPINE_CHILD_RETURN_TOOL || slot.current === null) return undefined;
+  const reason = childReturnRefusal(slot.current.latestContext.projection, enteredArrivals(ctx));
   return reason === null ? undefined : { block: true, reason };
 }
 

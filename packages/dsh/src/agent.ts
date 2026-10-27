@@ -2,10 +2,13 @@ import type { Agent, PreStepDecision } from "@deepseek-ai/dsh-agent";
 import { isAppendSurfaceEvent, type SessionEvent, type SessionSeq } from "@deepseek-ai/dsh-session";
 import type { EpochOrdinalId, FeatureFlag, SpineProjection, Terminal } from "@spinejit/spine-sdk";
 import {
+  childReturnRefusal,
   createHostAdapter,
   isSpineToolName,
   operationFromSpineToolCall,
   spineToolRefusal,
+  unarrivedBirths,
+  type SpawnBirth,
   type SpineHostAdapter,
   type SpineToolName,
 } from "@spinejit/spine-sdk/host";
@@ -14,6 +17,7 @@ import { createNodeSpineRuntime } from "@spinejit/spine-sdk/node";
 import {
   anchored,
   anchorOf,
+  arrivalOf,
   beginsSampling,
   emptySlot,
   eventMessage,
@@ -26,7 +30,10 @@ import {
 } from "./events.js";
 import { applySurfaceEdits, planItems, surfaceEdits, type PlanItem, type SurfaceNode } from "./projection.js";
 
-export const SPINE_FEATURES: FeatureFlag[] = ["jit"];
+export const SPINE_FEATURES: FeatureFlag[] = ["jit", "spawn"];
+
+/** Hands over the births a live commit made and where their sampling began in the log. */
+export type BirthHandler = (births: readonly SpawnBirth[], prefixEnd: number) => void;
 
 /**
  * One model response carries at most one Spine operation (the core admits one
@@ -59,6 +66,7 @@ interface Sampling {
 export class SpineAgent {
   readonly #agent: Agent;
   readonly #nodePrompt: string;
+  readonly #born: BirthHandler;
   #adapter!: SpineHostAdapter;
   /** Every session event seen, by seq. */
   readonly #events = new Map<number, SessionEvent>();
@@ -68,19 +76,26 @@ export class SpineAgent {
   #userSources = 0;
   #plan: PlanItem[] | null = null;
   #projection: SpineProjection | null = null;
+  /** Births whose arrival is in the log, by producer. */
+  readonly #entered = new Set<string>();
+  #recovering = false;
   #sampling: Sampling | null = null;
   #turn = 0;
   #step = 0;
   #fault: unknown = null;
 
-  private constructor(agent: Agent, nodePrompt: string) {
+  private constructor(agent: Agent, nodePrompt: string, born: BirthHandler) {
     this.#agent = agent;
     this.#nodePrompt = nodePrompt;
+    this.#born = born;
   }
 
-  static async create(agent: Agent, configToml: string): Promise<SpineAgent> {
-    const runtime = createNodeSpineRuntime({ thread: agent.id, features: SPINE_FEATURES, configToml });
-    const spine = new SpineAgent(agent, runtime.nodePrompt());
+  static async create(agent: Agent, configToml: string, born: BirthHandler): Promise<SpineAgent> {
+    const events = agent.session.snapshotEvents();
+    // A forked session's inherited prefix is its parent's namespace.
+    const thread = inheritedCut(events) === undefined ? agent.id : agent.session.header.parentSession!;
+    const runtime = createNodeSpineRuntime({ thread, features: SPINE_FEATURES, configToml });
+    const spine = new SpineAgent(agent, runtime.nodePrompt(), born);
     spine.#adapter = await createHostAdapter<PlanItem>({
       runtime: runtime.client,
       host: {
@@ -100,8 +115,12 @@ export class SpineAgent {
       dispose: () => runtime.dispose(),
     });
     // A resumed session brings its log as seed events, which are never published.
-    await spine.#recover(agent.session.snapshotEvents());
+    await spine.#recover(events);
     return spine;
+  }
+
+  get projection(): SpineProjection | null {
+    return this.#projection;
   }
 
   get fault(): unknown {
@@ -113,6 +132,19 @@ export class SpineAgent {
     if (this.#events.has(event.seq)) return;
     this.#events.set(event.seq, event);
     if (isAppendSurfaceEvent(event) && surfaceRole(event) === "source") this.#unobserved.push(event);
+    const arrival = arrivalOf(event);
+    if (arrival !== null) this.#entered.add(arrival.producer.join("."));
+  }
+
+  /** Why this agent, a Spawn child, may not return its memory yet, or null. */
+  returnRefusal(): string | null {
+    return childReturnRefusal(this.#projection!, this.#entered);
+  }
+
+  /** Births still pending whose arrival is not in the log yet. */
+  openBirths(): SpawnBirth[] {
+    if (this.#projection === null) return [];
+    return unarrivedBirths(this.#projection).filter((birth) => !this.#entered.has(birth.producer.join(".")));
   }
 
   /** Number the user messages entering a step `[U<n>]` before they are logged. */
@@ -163,7 +195,7 @@ export class SpineAgent {
     if (sampling === null) throw new SpineDshError(`${name} ran outside a Spine sampling`);
     if (sampling.staged !== null) throw new SpineToolLimitError(sampling.staged);
     // What the core would refuse at commit is a tool error now, not a fault later.
-    const refusal = spineToolRefusal(this.#projection!, name);
+    const refusal = spineToolRefusal(this.#projection!, name, this.#entered);
     if (refusal !== null) throw new SpineDshError(refusal);
     sampling.staged = name;
     await this.#guard(async () => {
@@ -186,14 +218,18 @@ export class SpineAgent {
    * Run the sampling lifecycle over a logged session, in log order. Each
    * sampling begins at its marked slot, stages the Spine call whose result was
    * not an error, and settles where the live agent settled it: before the next
-   * request, step or turn, or at the end of the log.
+   * request, step or turn, or at the end of the log. A forked session
+   * continues in its own namespace where its inherited prefix ends.
    */
   async #recover(events: readonly SessionEvent[]): Promise<void> {
     const calls = new Map<string, Extract<SessionEvent, { type: "tool/call" }>>();
+    const cut = inheritedCut(events);
+    this.#recovering = true;
     for (const event of events) {
-      if (beginsSampling(event) || event.type === "step/start" || event.type === "turn/start") {
+      if (beginsSampling(event) || event.type === "step/start" || event.type === "turn/start" || event.seq === cut) {
         await this.#settle(event.seq);
       }
+      if (event.seq === cut) await this.#guard(() => this.#continueNamespace(event.seq));
       this.accept(event);
       if (isUserSource(event) && anchorOf(eventMessage(event)) === null) {
         throw new SpineDshError(`session ${this.#agent.id} started without Spine: its user messages carry no [U#]`);
@@ -213,6 +249,18 @@ export class SpineAgent {
       }
     }
     await this.settle();
+    this.#recovering = false;
+  }
+
+  /**
+   * Observe the inherited sources and continue in this session's namespace.
+   * Births the parent made stay its own to join.
+   */
+  async #continueNamespace(cut: number): Promise<void> {
+    await this.#observe(cut);
+    const source = await this.#adapter.continueNamespace(this.#agent.id);
+    for (const cell of source.cells) this.#sourceSeqs.set(sourceKey(cell.source_id), cell.boundary as SessionSeq);
+    await this.#adapter.previewAndPublish();
   }
 
   /** Observe every logged source and make sure a plan is published for it. */
@@ -232,8 +280,12 @@ export class SpineAgent {
     await this.#guard(async () => {
       await this.#observe(to);
       const outcome = this.#outcome(sampling, to);
-      await this.#adapter.finishSampling(outcome.terminal, outcome.inputTokens);
+      const result = await this.#adapter.finishSampling(outcome.terminal, outcome.inputTokens);
       this.#sampling = null;
+      if (result.type !== "committed") return;
+      this.#projection = result.projection;
+      // The children a live Spawn bore start from the log before its sampling.
+      if (!this.#recovering && sampling.staged === "spine_spawn") this.#born(this.openBirths(), sampling.from);
     });
   }
 
@@ -312,6 +364,15 @@ export class SpineAgent {
       throw new SpineDshError("Spine context fault", { cause });
     }
   }
+}
+
+/** Where a forked session's inherited prefix ends: its last inherited seed marker. */
+function inheritedCut(events: readonly SessionEvent[]): number | undefined {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index]!;
+    if (event.type === "session/end-seed" && event.data.inherited === true) return event.seq;
+  }
+  return undefined;
 }
 
 function sourceKey(id: EpochOrdinalId): string {

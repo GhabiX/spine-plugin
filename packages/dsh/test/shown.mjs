@@ -16,3 +16,4 @@ export const node = (id, summary) => `spine: <spine_node id="${id}" summary="${s
 export const memory = (id, body) => `spine: <spine_memory node_id="${id}">\n${body}\n</spine_memory>`;
 export const call = (name, input) => `assistant: ${name} ${JSON.stringify(input)}`;
 export const staged = (name) => `tool: Spine ${name} staged`;
+export const arrival = (id, outcome, body) => `user: <spine_arrival node_id="${id}" outcome="${outcome}">\n${body}\n</spine_arrival>`;

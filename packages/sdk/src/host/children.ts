@@ -34,8 +34,14 @@ export function formatBirths(births: readonly SpawnBirth[]): string {
  * Why the core would refuse this Spine call when its sampling commits, or null.
  * A host refuses the call as a tool error instead, so a model mistake never
  * faults the session. Open and Spawn are refused only for their input.
+ * `entered` names, by producer, the births whose arrival is in the
+ * sampling's source: the commit joins them before it applies the call.
  */
-export function spineToolRefusal(projection: SpineProjection, name: SpineToolName): string | null {
+export function spineToolRefusal(
+  projection: SpineProjection,
+  name: SpineToolName,
+  entered: ReadonlySet<string>,
+): string | null {
   if (name !== "spine_close" && name !== "spine_next") return null;
   const cursor = projection.nodes.find((node) =>
     node.id.length === projection.cursor.length &&
@@ -43,14 +49,14 @@ export function spineToolRefusal(projection: SpineProjection, name: SpineToolNam
   );
   if (cursor === undefined) return "Spine cursor is missing from the derived tree";
   if (cursor.kind === "RootEpoch") return "no open Spine node is available to close";
-  const pending = unarrivedBirths(projection, projection.cursor);
+  const pending = unarrivedBirths(projection, projection.cursor).filter((birth) => !entered.has(birth.producer.join(".")));
   if (pending.length === 0) return null;
   return `Spawned children ${formatBirths(pending)} have not arrived. Each result arrives as its own message; close this node after they have arrived.`;
 }
 
 /** Why a Spawn child may not return its memory yet, or null: its own children come first. */
-export function childReturnRefusal(projection: SpineProjection): string | null {
-  const pending = unarrivedBirths(projection);
+export function childReturnRefusal(projection: SpineProjection, entered: ReadonlySet<string>): string | null {
+  const pending = unarrivedBirths(projection).filter((birth) => !entered.has(birth.producer.join(".")));
   if (pending.length === 0) return null;
   return `Spawned children ${formatBirths(pending)} have not arrived. Each result arrives as its own message; return after they have arrived.`;
 }

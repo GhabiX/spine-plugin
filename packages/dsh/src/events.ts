@@ -9,7 +9,8 @@ import {
   type UserMessage,
 } from "@deepseek-ai/dsh-llm";
 import { isAppendSurfaceEvent, type SessionEvent } from "@deepseek-ai/dsh-session";
-import type { SourceCharacter } from "@spinejit/spine-sdk";
+import type { SourceCharacter, SpawnArrival } from "@spinejit/spine-sdk";
+import { spineArrivalText } from "@spinejit/spine-sdk/host";
 
 declare module "@deepseek-ai/dsh-llm" {
   interface MessageSourceMap {
@@ -18,6 +19,8 @@ declare module "@deepseek-ai/dsh-llm" {
      * slots. `sampling` marks the slot that begins a Spine sampling.
      */
     spine: { kind: "spine"; sampling?: true };
+    /** A Spawn child's result, delivered to the session that bore it. */
+    "spine-arrival": { kind: "spine-arrival"; arrival: SpawnArrival };
   }
 }
 
@@ -70,6 +73,8 @@ export function isUserSource(event: SessionEvent): boolean {
 export function sourceCharacter(event: SessionEvent): SourceCharacter {
   const boundary = event.seq;
   if (event.type === "tool/result") return { type: "opaque", boundary };
+  const arrival = arrivalOf(event);
+  if (arrival !== null) return { type: "arrival", boundary, arrival };
   const message = eventMessage(event);
   const content = contentText(message.content);
   if (event.type === "assistant/message") {
@@ -121,6 +126,18 @@ export function beginsSampling(event: SessionEvent): boolean {
   if (event.type !== "developer/message" || !isAppendSurfaceEvent(event)) return false;
   const source = event.data.message.source;
   return source.kind === "spine" && source.sampling === true;
+}
+
+/** A Spawn child's arrival as the message its parent receives. */
+export function arrivalMessage(arrival: SpawnArrival): UserMessage {
+  return createUserMessage({ content: [{ type: "text", text: spineArrivalText(arrival) }], source: { kind: "spine-arrival", arrival } });
+}
+
+/** The arrival a logged message carries, or null. */
+export function arrivalOf(event: SessionEvent): SpawnArrival | null {
+  if (event.type !== "user/message") return null;
+  const source = event.data.source;
+  return source.kind === "spine-arrival" ? source.arrival : null;
 }
 
 /** A Spine item (node descriptor, memory, birth) as a model-visible user message. */

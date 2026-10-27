@@ -18,21 +18,25 @@ export class ScriptedAdapter extends LlmAdapter {
   #replies;
 
   /**
-   * @param replies one per request: a string is text, an array is tool calls
+   * @param replies one per request, or an object of such lists by session id
+   *   when several sessions run: a string is text, an array is tool calls
    *   `[name, input]`, `{ text, finish }` is text that ends with that finish
    *   kind, `{ fail }` throws that message, `{ hang: true }` waits for the
    *   request to be aborted, and a function of the request returns the reply.
    */
   constructor(replies) {
     super();
-    this.#replies = [...replies];
+    this.#replies = Array.isArray(replies)
+      ? [...replies]
+      : Object.fromEntries(Object.entries(replies).map(([id, list]) => [id, [...list]]));
   }
 
   async *stream(request) {
     this.requests.push(request);
-    let reply = this.#replies.shift();
+    const queue = Array.isArray(this.#replies) ? this.#replies : this.#replies[request.sessionId] ?? [];
+    let reply = queue.shift();
     if (typeof reply === "function") reply = await reply(request);
-    if (reply === undefined) throw new Error(`no scripted reply for request ${this.requests.length}`);
+    if (reply === undefined) throw new Error(`no scripted reply for request ${this.requests.length} of ${request.sessionId}`);
     if (reply.fail !== undefined) throw new Error(reply.fail);
     if (reply.hang === true) {
       await new Promise((resolve) => request.signal.addEventListener("abort", resolve, { once: true }));
@@ -101,20 +105,21 @@ export async function mountDsh(replies, { plugin = true, root } = {}) {
       agent.followup(createUserMessage({ content: [{ type: "text", text }], source: { kind: "user" } }));
       await agent.whenIdle();
     },
-    /** The model context DSH restores from the official JSONL log, without any plugin. */
+    /** The model context DSH restores from the official JSONL log, without any plugin; a session id names a disposed one. */
     async restored(agent) {
-      await ctx.sessions.flush(agent.session);
-      const handle = await ctx.sessionPersistence.open(agent.id, "read");
+      if (typeof agent !== "string") await ctx.sessions.flush(agent.session);
+      const id = typeof agent === "string" ? agent : agent.id;
+      const handle = await ctx.sessionPersistence.open(id, "read");
       try {
         const data = await handle.read();
-        return Session.fromRestore(agent.id, data.events, handle.header, handle.inheritedEventCount, data.eventState)
+        return Session.fromRestore(id, data.events, handle.header, handle.inheritedEventCount, data.eventState)
           .deriveMessages();
       } finally {
         await handle.close();
       }
     },
-    /** Every event the agent's session published, in log order. */
-    events: (agent) => events.get(agent.id) ?? [],
+    /** Every event a session published, in log order, by agent or session id. */
+    events: (agent) => events.get(typeof agent === "string" ? agent : agent.id) ?? [],
     dispose: () => ctx.fiber.dispose(),
   };
 }
