@@ -17,7 +17,11 @@ export class ScriptedAdapter extends LlmAdapter {
   requests = [];
   #replies;
 
-  /** @param replies one per request: a string is text, an array is tool calls `[name, input]`. */
+  /**
+   * @param replies one per request: a string is text, an array is tool calls
+   *   `[name, input]`, `{ fail }` throws that message, `{ hang: true }` waits for
+   *   the request to be aborted, and a function of the request returns the reply.
+   */
   constructor(replies) {
     super();
     this.#replies = [...replies];
@@ -25,8 +29,14 @@ export class ScriptedAdapter extends LlmAdapter {
 
   async *stream(request) {
     this.requests.push(request);
-    const reply = this.#replies.shift();
+    let reply = this.#replies.shift();
+    if (typeof reply === "function") reply = await reply(request);
     if (reply === undefined) throw new Error(`no scripted reply for request ${this.requests.length}`);
+    if (reply.fail !== undefined) throw new Error(reply.fail);
+    if (reply.hang === true) {
+      await new Promise((resolve) => request.signal.addEventListener("abort", resolve, { once: true }));
+      throw request.signal.reason;
+    }
     const blocks = typeof reply === "string"
       ? [{ type: "text", text: reply }]
       : reply.map(([name, input], index) => ({
@@ -58,6 +68,11 @@ export async function mountDsh(replies, { plugin = true } = {}) {
     await ctx.loader.root.update([{ id: "spinejit", name: PLUGIN }]);
     await ctx.loader.await();
   }
+  const events = new Map();
+  ctx.on("session/event", (session, event) => {
+    if (!events.has(session.id)) events.set(session.id, []);
+    events.get(session.id).push(event);
+  });
   const harness = await mountAgentLoopTestHarness(ctx);
   const adapter = new ScriptedAdapter(replies);
   ctx.llm.registerAdapter(["scripted"], adapter);
@@ -68,6 +83,7 @@ export async function mountDsh(replies, { plugin = true } = {}) {
     /** Create an agent and run one user message until the loop is idle. */
     async run(text) {
       const agent = await harness.create(`session-${++sessions}`, { provider: "scripted", model: "scripted" }, { cwd: root });
+      this.agent = agent;
       await this.send(agent, text);
       return agent;
     },
@@ -87,6 +103,8 @@ export async function mountDsh(replies, { plugin = true } = {}) {
         await handle.close();
       }
     },
+    /** Every event the agent's session published, in log order. */
+    events: (agent) => events.get(agent.id) ?? [],
     dispose: () => ctx.fiber.dispose(),
   };
 }

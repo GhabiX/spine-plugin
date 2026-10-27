@@ -66,12 +66,17 @@ saved v1 recipe snapshots are not accepted as v2. See the
 
 - `crates/spine-wasm`: stateful, coarse Rust/WASM transaction binding.
 - `packages/sdk`: `@spinejit/spine-sdk`, versioned DTOs and the ESM runtime.
+  Its `./host` entry is the layer every host plugin shares: the transaction
+  controller, the host adapter contract, Spawn coordination, tool input
+  decoding and the model-visible text of Spine items. `spine.toml` in this
+  package is the SpineConfig every host passes as `configToml`.
 - `packages/host`: `@spinejit/spine-host`, the minimal Pi Plugin Host contract
   for ownership, dependency order, namespaces, lifecycle, immutable event
   observation, private storage, and session requests.
-- `packages/plugin`: `@spinejit/pi-spinejit`, shared controller plus the `./pi`
-  entrypoint. The previous DeepSeek Harness adapter is archived in
-  `archive/dsh_adapter_v0_20261027/`; a rewrite against current DSH follows.
+- `packages/plugin`: `@spinejit/pi-spinejit`, the Pi plugin (`./pi` entrypoint).
+- `packages/dsh`: `@spinejit/dsh-spinejit`, the DeepSeek Harness plugin, being
+  rewritten against current DSH. The previous adapter is archived in
+  `archive/dsh_adapter_v0_20261027/`.
 - `archive/spinetree_plugin_20261027/`: the former `@spinetree/plugin`
   SpineTree coordination plugin, archived on 2026-10-27 together with its
   release gate. It depended on the old blocking Spawn and is no longer built.
@@ -142,11 +147,11 @@ SDK/host packages and Pi 1.1.0 rather than bundling them. See the
 
 It registers the four canonical tools, has no browsing slash commands, and
 uses `@spinejit/spine-sdk/node` for the packaged WASM runtime.
-Pi reads `packages/plugin/spine.toml` once per extension activation. The tool
+Pi reads `packages/sdk/spine.toml` once per extension activation. The tool
 catalog and default session runtime share that configuration snapshot; tree
 navigation keeps it, while `/new` or reload activates the current disk version.
-The text is passed to WASM as `configToml`. The file owns Pi's JIT text, node
-text, and tool descriptions.
+The text is passed to WASM as `configToml`. The file owns the JIT text, node
+text, and tool descriptions that every host plugin uses.
 Editing these config fields does not require a WASM rebuild. Parameter-field
 descriptions, including the shared `close`/`next` memory guidance, come from
 `spine-core/src/tools.rs` and require rebuilding the packaged WASM. Pi's
@@ -318,8 +323,12 @@ own session.
 ## DeepSeek Harness extension
 
 The previous adapter targeted an older DSH and the blocking Spawn receipt. It is
-archived in `archive/dsh_adapter_v0_20261027/` and is being rewritten against
-current DSH with the arrival semantics above.
+archived in `archive/dsh_adapter_v0_20261027/`. `packages/dsh` rewrites it
+against `@deepseek-ai/dsh` 0.2.1-rc.2 with the arrival semantics above: the
+model context is the DSH session surface, which the plugin edits into the Spine
+plan with standard surface replacements, so a session log restores without the
+plugin. Open, Close, Next and user anchors work; recovery, Spawn and real-model
+tests come next. See [its README](packages/dsh/README.md).
 
 ## Development source
 
