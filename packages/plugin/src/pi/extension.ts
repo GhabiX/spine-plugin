@@ -25,6 +25,7 @@ import {
   type NodeSpineRuntime,
 } from "@spinejit/spine-sdk/node";
 import {
+  loadSpineConfigToml,
   runSpawnChild,
   SpineToolInputError,
   toArrival,
@@ -71,7 +72,6 @@ import {
   type PiAgentMessage,
   type PiSourceBindings,
 } from "./messages.js";
-import { loadPiSpineConfigToml } from "./spine-config.js";
 import { resolvePiInvocation } from "./invocation.js";
 import {
   linesComponent,
@@ -198,7 +198,7 @@ function activatePiExtension(
   // Ownership is decided at session_start, after every extension factory has
   // registered its synchronous mode responder. Load order cannot select mode.
   const compactionOwnerEvent = "pi:compaction-owner:v1";
-  const configToml = loadPiSpineConfigToml();
+  const configToml = loadSpineConfigToml();
   const runtimeFactory = options.runtimeFactory ?? {
     create: (thread: string) => createNodeSpineRuntime({
       thread,

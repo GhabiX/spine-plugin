@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import test from "node:test";
 
 import { discoverAndLoadExtensions } from "@earendil-works/pi-coding-agent";
+import { loadSpineConfigToml } from "@spinejit/spine-sdk/host";
 import { createNodeSpineRuntime } from "@spinejit/spine-sdk/node";
 
 const execFileAsync = promisify(execFile);
@@ -49,7 +50,7 @@ test("packed Pi manifest loads the same complete tool catalog as the local packa
   const agentDir = join(artifacts, "agent");
   await mkdir(cwd);
   await mkdir(agentDir);
-  const configToml = await readFile(join(packageDir, "spine.toml"), "utf8");
+  const configToml = loadSpineConfigToml();
   const runtime = createNodeSpineRuntime({ thread: "package-entry-test", features: ["jit", "spawn"], configToml });
   try {
     const expected = runtime.toolCatalog().map(({ id, description, parameters }) => ({

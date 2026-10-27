@@ -27,7 +27,8 @@ the same.
 
 ## Spine plugin prompt configuration
 
-Pi loads its prompt configuration from `spine.toml` in this package. This file
+Pi loads its prompt configuration from `spine.toml` in `@spinejit/spine-sdk`,
+the SpineConfig every host plugin shares. This file
 overrides the embedded `spine-core` prompt defaults, so updating the shared WASM
 artifact alone does not update Pi's configured wording.
 

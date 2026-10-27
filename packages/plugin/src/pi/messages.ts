@@ -5,7 +5,13 @@ import type {
   SourceCharacter,
   SpawnArrival,
 } from "@spinejit/spine-sdk";
-import type { PublishedContext } from "@spinejit/spine-sdk/host";
+import {
+  spineArrivalText,
+  spineBirthText,
+  spineMemoryText,
+  spineNodeText,
+  type PublishedContext,
+} from "@spinejit/spine-sdk/host";
 import { PI_ARRIVAL_MESSAGE_TYPE, type PiArrivalDetails } from "./protocol.js";
 
 interface PiTextContent {
@@ -148,11 +154,10 @@ export function arrivalOf(message: PiAgentMessage): SpawnArrival | null {
 
 /** The model-visible text of an arrival; the typed value travels in details. */
 export function arrivalMessage(arrival: SpawnArrival): Extract<PiAgentMessage, { role: "custom" }> {
-  const body = arrival.outcome === "completed" ? arrival.memory! : arrival.diagnostic!;
   return {
     role: "custom",
     customType: PI_ARRIVAL_MESSAGE_TYPE,
-    content: `<spine_arrival node_id="${arrival.producer.join(".")}" outcome="${arrival.outcome}">\n${body}\n</spine_arrival>`,
+    content: spineArrivalText(arrival),
     display: true,
     timestamp: Date.now(),
     details: { schema: "spine.pi.arrival/v1", arrival } satisfies PiArrivalDetails,
@@ -288,12 +293,9 @@ function materializeProjection(
   const item = cell.item;
   if ("SyntheticNode" in item) {
     const { node_id: nodeId, summary, status } = item.SyntheticNode;
-    const live = status === "Live" || status === "Opened";
-    const prompt = live ? nodePrompt.trim() : "";
-    const inner = prompt.length > 0 ? `\n${prompt}\n` : "\n";
     return spineProjectionMessage(
       PI_SPINE_NODE_MESSAGE_TYPE,
-      `<spine_node id="${nodeId.join(".")}" summary="${escapeXmlAttribute(summary)}" status="${status.toLowerCase()}">${inner}</spine_node>`,
+      spineNodeText(nodeId, summary, status, nodePrompt),
       {
         schema: "spine.pi.projection/v1",
         kind: "node",
@@ -309,7 +311,7 @@ function materializeProjection(
       const nodeId = slot.Summary.owner_node.join(".");
       return spineProjectionMessage(
         PI_SPINE_MEMORY_MESSAGE_TYPE,
-        `<spine_memory node_id="${slot.Summary.owner_node.join(".")}">\n${slot.Summary.body}\n</spine_memory>`,
+        spineMemoryText(slot.Summary.owner_node, slot.Summary.body),
         {
           schema: "spine.pi.projection/v1",
           kind: "memory",
@@ -323,7 +325,7 @@ function materializeProjection(
       const nodeId = owner.join(".");
       return spineProjectionMessage(
         PI_SPINE_BIRTH_MESSAGE_TYPE,
-        `<spine_spawn node_id="${nodeId}" summary="${escapeXmlAttribute(task.summary)}">\n${task.prompt}\n</spine_spawn>`,
+        spineBirthText(owner, task),
         {
           schema: "spine.pi.projection/v1",
           kind: "birth",
@@ -480,12 +482,4 @@ function sortJson(value: unknown): unknown {
     );
   }
   return value;
-}
-
-function escapeXmlAttribute(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
 }

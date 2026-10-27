@@ -1,5 +1,5 @@
-# Pi-owned SpineConfig. The Pi extension passes this file as configToml.
-# This owns Pi's JIT/node text and tool descriptions. Tool names are Pi names.
+# The SpineConfig every host plugin (Pi, DeepSeek Harness) passes as configToml.
+# It owns the JIT/node text and tool descriptions; tool names are spine_<id>.
 # Editing it does not require a WASM rebuild. Hosts that omit configToml
 # still use the spine-core embedded default.
 schema_version = 1

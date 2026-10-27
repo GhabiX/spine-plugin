@@ -31,7 +31,8 @@
   "files": [
     "README.md",
     "dist",
-    "wasm"
+    "wasm",
+    "spine.toml"
   ],
   "publishConfig": {
     "access": "public"

@@ -13,7 +13,7 @@ import extension, {
 } from "../dist/pi/extension.js";
 import { createNodeSpineRuntime } from "@spinejit/spine-sdk/node";
 import { resolvePiInvocation } from "../dist/pi/invocation.js";
-import { loadPiSpineConfigToml } from "../dist/pi/spine-config.js";
+import { loadSpineConfigToml } from "@spinejit/spine-sdk/host";
 import { SPINE_TREE_VIEW_REQUEST } from "../dist/pi/tree-view-contract.js";
 
 function mockPi() {
@@ -378,7 +378,7 @@ test("before_agent_start composes the configured prompt and registers its tool c
   const expectedRuntime = createNodeSpineRuntime({
     thread: "pi-session",
     features: ["jit", "spawn"],
-    configToml: loadPiSpineConfigToml(),
+    configToml: loadSpineConfigToml(),
   });
   try {
     assert.equal(
