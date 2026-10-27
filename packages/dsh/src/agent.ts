@@ -1,9 +1,17 @@
 import type { Agent, PreStepDecision } from "@deepseek-ai/dsh-agent";
-import { appendPluginRecord, isAppendSurfaceEvent, type SessionEvent, type SessionSeq } from "@deepseek-ai/dsh-session";
-import type { EpochOrdinalId, FeatureFlag, Terminal } from "@spinejit/spine-sdk";
 import {
+  appendPluginRecord,
+  isAppendSurfaceEvent,
+  pluginRecordOf,
+  type SessionEvent,
+  type SessionSeq,
+} from "@deepseek-ai/dsh-session";
+import type { EpochOrdinalId, FeatureFlag, ReplayItem, SamplingArchiveRecord, Terminal } from "@spinejit/spine-sdk";
+import {
+  archiveRecordId,
   createHostAdapter,
   operationFromSpineToolCall,
+  SPINE_HOST_PROTOCOL_SCHEMA,
   type HostArchiveEnvelope,
   type SpineHostAdapter,
   type SpineToolName,
@@ -30,6 +38,8 @@ declare module "@deepseek-ai/dsh-session" {
   }
 }
 
+const ARCHIVE_RECORD = "plugin:spinejit/archive";
+
 export const SPINE_FEATURES: FeatureFlag[] = ["jit"];
 
 /**
@@ -53,7 +63,9 @@ interface Sampling {
  * The Spine state of one DSH agent. One main-loop model request is one Spine
  * sampling; it settles at the next pre-step, at turn-stopping, at a request
  * error, or when the agent is disposed. The surface follows the plan the core
- * last published, edited when the next step opens.
+ * last published, edited when the next step opens. The session log alone
+ * rebuilds this state: its sources and archive records, in log order, are
+ * exactly what the core observed and committed.
  */
 export class SpineAgent {
   readonly #agent: Agent;
@@ -77,9 +89,6 @@ export class SpineAgent {
   }
 
   static async create(agent: Agent, configToml: string): Promise<SpineAgent> {
-    if (agent.session.surface.nodes.length > 0) {
-      throw new SpineDshError(`Spine cannot resume session ${agent.id} yet: its conversation started without this plugin state`);
-    }
     const runtime = createNodeSpineRuntime({ thread: agent.id, features: SPINE_FEATURES, configToml });
     const spine = new SpineAgent(agent, runtime.nodePrompt());
     spine.#adapter = await createHostAdapter<PlanItem>({
@@ -89,7 +98,7 @@ export class SpineAgent {
         // context moves a plan source off the surface, and the projection faults.
         claimOwnership: async () => {},
         persistArchive: async (entry) => {
-          appendPluginRecord(agent.session, "plugin:spinejit/archive", entry);
+          appendPluginRecord(agent.session, ARCHIVE_RECORD, entry);
         },
         context: {
           materialize: async (context) => planItems(context, (id) => spine.#seqOf(id), spine.#nodePrompt),
@@ -100,6 +109,10 @@ export class SpineAgent {
       },
       dispose: () => runtime.dispose(),
     });
+    // A resumed session brings its log as seed events, which are never published.
+    const events = agent.session.snapshotEvents();
+    for (const event of events) spine.#events.set(event.seq, event);
+    if (agent.session.surface.nodes.length > 0) await spine.#recover(events);
     return spine;
   }
 
@@ -185,6 +198,34 @@ export class SpineAgent {
     this.#adapter.dispose();
   }
 
+  /** Replay the log into the core: each source as observed, each archive record as persisted. */
+  async #recover(events: readonly SessionEvent[]): Promise<void> {
+    const inputs: ReplayItem[] = [];
+    const sources = new Set<number>();
+    for (const event of events) {
+      const record = pluginRecordOf(event);
+      if (record?.type === ARCHIVE_RECORD) {
+        inputs.push({ type: "archive", record: archivedSampling(record.data) });
+        continue;
+      }
+      if (!isAppendSurfaceEvent(event) || surfaceRole(event) !== "source") continue;
+      if (isUserSource(event)) {
+        if (anchorOf(eventMessage(event)) === null) {
+          throw new SpineDshError(`session ${this.#agent.id} started without Spine: its user messages carry no [U#]`);
+        }
+        this.#userSources += 1;
+      }
+      inputs.push({ type: "source", character: sourceCharacter(event) });
+      sources.add(event.seq);
+    }
+    await this.#adapter.replayWithSources(inputs, async (snapshot) => {
+      for (const cell of snapshot.cells) {
+        if (!sources.has(cell.boundary)) throw new SpineDshError(`Spine replayed source ${cell.boundary}, which is not a logged source`);
+        this.#sourceSeqs.set(sourceKey(cell.source_id), cell.boundary as SessionSeq);
+      }
+    });
+  }
+
   async #observe(): Promise<number> {
     const events = this.#unobserved;
     if (events.length === 0) return 0;
@@ -259,6 +300,16 @@ export class SpineAgent {
       throw new SpineDshError("Spine context fault", { cause });
     }
   }
+}
+
+/** A stored archive record, checked as its owner must check restored plugin data. */
+function archivedSampling(data: unknown): SamplingArchiveRecord {
+  const entry = data as Partial<HostArchiveEnvelope> | null;
+  if (entry?.schema !== SPINE_HOST_PROTOCOL_SCHEMA || entry.record === undefined ||
+    entry.durabilityId !== archiveRecordId(entry.record)) {
+    throw new SpineDshError("a stored Spine archive record is malformed");
+  }
+  return entry.record;
 }
 
 function sourceKey(id: EpochOrdinalId): string {

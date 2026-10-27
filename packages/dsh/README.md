@@ -28,10 +28,15 @@ loads it as the Cordis plugin `spinejit`.
 - Spine tools only stage their operation, and a model response may carry one
   Spine tool call; a second one is a tool error. Archive records are stored as
   `plugin:spinejit/archive` session records.
+- A resumed session rebuilds its Spine state from the log alone: its sources
+  and archive records, in log order, are what the core observed and committed,
+  so the plugin replays them. A sampling that began and never committed replays
+  as abandoned. A session whose conversation started without this plugin is
+  refused: its user messages carry no `[U#]`.
 
 ## Not yet
 
-- Resuming a session is refused until recovery lands; Spawn is not enabled.
+- Spawn is not enabled. Forked sessions are not handled.
 - Spine tools must be called by the model directly, not from code (PTC).
 - Plugins that rewrite conversation context (compaction, tool-result pruning,
   image offload) must not be loaded with this one. Spine owns the context; a

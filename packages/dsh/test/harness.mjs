@@ -57,9 +57,10 @@ export class ScriptedAdapter extends LlmAdapter {
  * Mount DSH with the plugin loaded by the Cordis Loader, as a bundle loads it.
  * @param replies the scripted model replies.
  * @param plugin false to run the same world without the plugin.
+ * @param root an earlier world's directory, to resume its persisted sessions.
  */
-export async function mountDsh(replies, { plugin = true } = {}) {
-  const root = await mkdtemp(join(tmpdir(), "dsh-spinejit-"));
+export async function mountDsh(replies, { plugin = true, root } = {}) {
+  root ??= await mkdtemp(join(tmpdir(), "dsh-spinejit-"));
   const ctx = new Context();
   await mountAgentLoopTestDependencies(ctx);
   await ctx.plugin(Jsonl, { root: join(root, "sessions"), compression: "none" });
@@ -80,11 +81,18 @@ export async function mountDsh(replies, { plugin = true } = {}) {
   return {
     ctx,
     adapter,
+    root,
     /** Create an agent and run one user message until the loop is idle. */
     async run(text) {
       const agent = await harness.create(`session-${++sessions}`, { provider: "scripted", model: "scripted" }, { cwd: root });
       this.agent = agent;
       await this.send(agent, text);
+      return agent;
+    },
+    /** Resume a persisted session, as a restarted process does. */
+    async resume(id) {
+      const { agent } = await ctx.agents.resume({ resumeSessionId: id, agentOptions: { provider: "scripted", model: "scripted" } });
+      this.agent = agent;
       return agent;
     },
     async send(agent, text) {

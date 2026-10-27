@@ -327,7 +327,7 @@ archived in `archive/dsh_adapter_v0_20261027/`. `packages/dsh` rewrites it
 against `@deepseek-ai/dsh` 0.2.1-rc.2 with the arrival semantics above: the
 model context is the DSH session surface, which the plugin edits into the Spine
 plan with standard surface replacements, so a session log restores without the
-plugin. Open, Close, Next and user anchors work; recovery, Spawn and real-model
+plugin. Open, Close, Next, user anchors and resume work; Spawn and real-model
 tests come next. See [its README](packages/dsh/README.md).
 
 ## Development source
