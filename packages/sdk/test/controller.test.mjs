@@ -6,7 +6,7 @@ import {
   packReplayApplyBatches,
   SpineController,
   SpineControllerError,
-} from "../dist/index.js";
+} from "../dist/host/index.js";
 
 const RECORD = {
   type: "sampling_started",

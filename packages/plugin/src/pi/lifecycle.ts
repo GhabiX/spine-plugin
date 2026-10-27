@@ -6,16 +6,16 @@ import type {
   Terminal,
 } from "@spinejit/spine-sdk";
 
-import type { SpineHostAdapter } from "../host-adapter.js";
-import type { FinishSamplingResult } from "../controller.js";
-import { isPiHostSystemMessage, PiSourceBindings, sourceObservation, type PiAgentMessage } from "./messages.js";
 import {
   decodeSpineSpawnTasks,
   isSpineToolName,
   operationFromSpineToolCall,
   SPINE_TOOL_NAMES,
+  type FinishSamplingResult,
+  type SpineHostAdapter,
   type SpineToolName,
-} from "../tools.js";
+} from "@spinejit/spine-sdk/host";
+import { isPiHostSystemMessage, PiSourceBindings, sourceObservation, type PiAgentMessage } from "./messages.js";
 
 export const PI_SPINE_TOOL_NAMES = SPINE_TOOL_NAMES;
 

@@ -1,5 +1,5 @@
-import type { SpawnTask, SpineOperation } from "@spinejit/spine-sdk";
-import { validateSpineToolInput, type SpineToolInput } from "@spinejit/spine-sdk/node";
+import type { SpawnTask, SpineOperation } from "../index.js";
+import { validateSpineToolInput, type SpineToolInput } from "../node.js";
 
 export const SPINE_TOOL_NAMES = [
   "spine_open",

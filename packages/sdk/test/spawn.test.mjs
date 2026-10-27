@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { runSpawnChild, toArrival } from "../dist/spawn.js";
+import { runSpawnChild, toArrival } from "../dist/host/spawn.js";
 
 const task = { summary: "child", prompt: "do the work" };
 

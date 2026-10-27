@@ -8,7 +8,7 @@ import type {
   SpineOperation,
   SpineRuntimeClient,
   Terminal,
-} from "@spinejit/spine-sdk";
+} from "../index.js";
 
 import {
   SpineController,

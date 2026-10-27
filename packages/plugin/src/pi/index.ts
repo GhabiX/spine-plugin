@@ -7,7 +7,7 @@ import {
   type PublishedContext,
   type SpineCompactMetadata,
   type SpineHostAdapter,
-} from "../index.js";
+} from "@spinejit/spine-sdk/host";
 
 export * from "./messages.js";
 export * from "./lifecycle.js";

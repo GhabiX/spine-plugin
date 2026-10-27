@@ -24,18 +24,19 @@ import {
   createNodeSpineRuntime,
   type NodeSpineRuntime,
 } from "@spinejit/spine-sdk/node";
-import type { FinishSamplingResult, PublishedContext } from "../controller.js";
-import { Type } from "typebox";
-
-import type { HostContextEnvelope } from "../host-adapter.js";
 import {
   runSpawnChild,
+  SpineToolInputError,
   toArrival,
+  type FinishSamplingResult,
+  type HostContextEnvelope,
+  type PublishedContext,
   type SpawnChildContext,
   type SpawnChildTerminal,
   type SpawnRecoveryPolicy,
-} from "../spawn.js";
-import { SpineToolInputError } from "../tools.js";
+} from "@spinejit/spine-sdk/host";
+import { Type } from "typebox";
+
 import { watchParent } from "./parent-watch.js";
 import type { SpawnArrival, SpawnTask, SpineProjection } from "@spinejit/spine-sdk";
 import {

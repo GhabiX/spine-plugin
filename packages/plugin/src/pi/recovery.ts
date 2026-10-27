@@ -5,8 +5,7 @@ import type {
   SpineRuntimeClient,
 } from "@spinejit/spine-sdk";
 
-import { archiveRecordId } from "../controller.js";
-import type { SpineHostAdapter } from "../host-adapter.js";
+import { archiveRecordId, type SpineHostAdapter } from "@spinejit/spine-sdk/host";
 import { isPiHostSystemMessage, PiSourceBindings, sourceObservation, type PiAgentMessage } from "./messages.js";
 import {
   PI_ADAPTER_ID,

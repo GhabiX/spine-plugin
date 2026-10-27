@@ -5,7 +5,7 @@ import type {
   SourceCharacter,
   SpawnArrival,
 } from "@spinejit/spine-sdk";
-import type { PublishedContext } from "../controller.js";
+import type { PublishedContext } from "@spinejit/spine-sdk/host";
 import { PI_ARRIVAL_MESSAGE_TYPE, type PiArrivalDetails } from "./protocol.js";
 
 interface PiTextContent {

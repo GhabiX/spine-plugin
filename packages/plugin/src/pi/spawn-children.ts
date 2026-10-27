@@ -1,6 +1,6 @@
 import type { SpawnArrival, SpawnTask, SpineProjection } from "@spinejit/spine-sdk";
 
-import { toArrival } from "../spawn.js";
+import { toArrival } from "@spinejit/spine-sdk/host";
 
 /** A committed birth: the child's id, the task it was given, and where its sampling starts. */
 export interface PiSpawnBirth {

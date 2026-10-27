@@ -11,8 +11,8 @@ import type {
   SpineRuntimeClient,
   SourceSnapshot,
   Terminal,
-} from "@spinejit/spine-sdk";
-import { encodeCommand } from "@spinejit/spine-sdk";
+} from "../index.js";
+import { encodeCommand } from "../index.js";
 
 const REPLAY_APPLY_PACK_BUDGET_BYTES = 1024 * 1024;
 

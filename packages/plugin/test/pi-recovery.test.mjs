@@ -4,7 +4,7 @@ import test from "node:test";
 
 import { createNodeSpineRuntime } from "@spinejit/spine-sdk/node";
 
-import { archiveRecordId } from "../dist/index.js";
+import { archiveRecordId } from "@spinejit/spine-sdk/host";
 import {
   buildPiReplayPlan,
   buildCompactBarrier,

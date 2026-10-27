@@ -1,4 +1,4 @@
-import type { SpawnArrival, SpawnOutcome, SpawnTask } from "@spinejit/spine-sdk";
+import type { SpawnArrival, SpawnOutcome, SpawnTask } from "../index.js";
 
 // Arrival guards mirror the core's SpawnArrival validation, so a child result
 // the core would reject becomes an errored arrival instead of a host fault.

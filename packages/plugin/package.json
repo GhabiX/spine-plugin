@@ -28,10 +28,6 @@
       "types": "./dist/pi/tree-view-contract.d.ts",
       "import": "./dist/pi/tree-view-contract.js"
     },
-    ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
-    },
     "./pi": {
       "types": "./dist/pi/index.d.ts",
       "import": "./dist/pi/index.js"
