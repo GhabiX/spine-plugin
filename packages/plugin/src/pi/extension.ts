@@ -80,7 +80,14 @@ import { buildPiReplayPlan, recoverPiSession, type PiBranchEntry, type PiReplayS
 import { SpineTreeDisplay } from "./tree-view.js";
 import { SPINE_TREE_VIEW_REQUEST } from "./tree-view-contract.js";
 import { queryPiSpineMode, type PiSpineMode } from "./session-mode.js";
-import { PiSpawnChildren, unarrivedBirths, type PiSpawnBirth } from "./spawn-children.js";
+import {
+  childReturnRefusal,
+  formatBirths,
+  SpawnChildren,
+  spineToolRefusal,
+  unarrivedBirths,
+  type SpawnBirth,
+} from "@spinejit/spine-sdk/host";
 import {
   renderSpawnAccepted,
   renderSpawnCall,
@@ -156,7 +163,7 @@ export interface CreatePiSpinePluginOptions extends CreatePiExtensionOptions {
 interface ActivePiSession {
   lifecycle: PiSamplingLifecycle;
   runtime: NodeSpineRuntime;
-  children: PiSpawnChildren;
+  children: SpawnChildren;
   latestContext: PublishedContext;
   materializeMessages(branch: readonly PiBranchEntry[]): PiAgentMessage[];
 }
@@ -991,7 +998,7 @@ async function initializeSession(
         contextReady: true,
       }),
       runtime,
-      children: new PiSpawnChildren((arrival, wake) => deliverArrival(pi, slot, active, arrival, wake)),
+      children: new SpawnChildren((arrival, wake) => deliverArrival(pi, slot, active, arrival, wake)),
       latestContext: initialContext,
       materializeMessages(branch: readonly PiBranchEntry[]) {
         return materializeFromBranch(initialContext, recovered.bindings, branch, runtime!.nodePrompt());
@@ -1159,26 +1166,9 @@ function controlToolAdmission(
     const detail = fault instanceof Error ? fault.message : String(fault);
     return { block: true, reason: `Spine durability is faulted: ${detail}` };
   }
-  if (toolName === "spine_open" || slot.current === null) return undefined;
-  const projection = slot.current.latestContext.projection;
-  const cursor = projection.nodes.find((node) =>
-    node.id.length === projection.cursor.length &&
-    node.id.every((part, index) => part === projection.cursor[index]),
-  );
-  if (cursor === undefined) {
-    return { block: true, reason: "Spine cursor is missing from the derived tree" };
-  }
-  if ((toolName === "spine_close" || toolName === "spine_next") && cursor.kind === "RootEpoch") {
-    return { block: true, reason: "no open Spine node is available to close" };
-  }
-  const pending = unarrivedBirths(projection, projection.cursor);
-  if (pending.length > 0) {
-    return {
-      block: true,
-      reason: `Spawned children ${formatBirths(pending)} have not arrived. Each result arrives as its own message; close this node after they have arrived.`,
-    };
-  }
-  return undefined;
+  if (slot.current === null) return undefined;
+  const reason = spineToolRefusal(slot.current.latestContext.projection, toolName as (typeof CONTROL_TOOLS)[number]);
+  return reason === null ? undefined : { block: true, reason };
 }
 
 /** A child returns its memory only after its own spawned children have arrived. */
@@ -1187,16 +1177,8 @@ function childReturnAdmission(
   toolName: string,
 ): { block: true; reason: string } | undefined {
   if (toolName !== CHILD_RETURN_TOOL || slot.current === null) return undefined;
-  const pending = unarrivedBirths(slot.current.latestContext.projection);
-  if (pending.length === 0) return undefined;
-  return {
-    block: true,
-    reason: `Spawned children ${formatBirths(pending)} have not arrived. Each result arrives as its own message; return after they have arrived.`,
-  };
-}
-
-function formatBirths(births: readonly PiSpawnBirth[]): string {
-  return births.map((birth) => `${birth.producer.join(".")} (${birth.task.summary})`).join(", ");
+  const reason = childReturnRefusal(slot.current.latestContext.projection);
+  return reason === null ? undefined : { block: true, reason };
 }
 
 function childScope(ctx: ExtensionContext): ChildSessionScope {
@@ -1226,7 +1208,7 @@ function enteredArrivals(ctx: ExtensionContext): Set<string> {
   }));
 }
 
-function birthRefs(ctx: ExtensionContext, births: readonly PiSpawnBirth[]): ChildBirthRef[] {
+function birthRefs(ctx: ExtensionContext, births: readonly SpawnBirth[]): ChildBirthRef[] {
   const entries = new Map(branchSources(ctx).map((source) => [source.boundary, source.entryId]));
   return births.map((birth) => {
     const origin = entries.get(birth.start);

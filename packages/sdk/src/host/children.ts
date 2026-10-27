@@ -1,9 +1,9 @@
-import type { SpawnArrival, SpawnTask, SpineProjection } from "@spinejit/spine-sdk";
-
-import { toArrival } from "@spinejit/spine-sdk/host";
+import type { SpawnArrival, SpawnTask, SpineProjection } from "../index.js";
+import type { SpineToolName } from "./tools.js";
+import { toArrival } from "./spawn.js";
 
 /** A committed birth: the child's id, the task it was given, and where its sampling starts. */
-export interface PiSpawnBirth {
+export interface SpawnBirth {
   producer: number[];
   task: SpawnTask;
   start: number;
@@ -13,7 +13,7 @@ export interface PiSpawnBirth {
  * Births inside `scope` (a node id prefix; empty = all) this session still has
  * to join. Inherited births are joined by the session that bore them.
  */
-export function unarrivedBirths(projection: SpineProjection, scope: readonly number[] = []): PiSpawnBirth[] {
+export function unarrivedBirths(projection: SpineProjection, scope: readonly number[] = []): SpawnBirth[] {
   return projection.nodes
     .filter((node) => node.spawn === "pending" &&
       scope.every((part, index) => node.id[index] === part))
@@ -24,6 +24,35 @@ export function unarrivedBirths(projection: SpineProjection, scope: readonly num
       }
       return { producer: [...node.id], task: slot.Birth.task, start: node.start };
     });
+}
+
+export function formatBirths(births: readonly SpawnBirth[]): string {
+  return births.map((birth) => `${birth.producer.join(".")} (${birth.task.summary})`).join(", ");
+}
+
+/**
+ * Why the core would refuse this Spine call when its sampling commits, or null.
+ * A host refuses the call as a tool error instead, so a model mistake never
+ * faults the session. Open and Spawn are refused only for their input.
+ */
+export function spineToolRefusal(projection: SpineProjection, name: SpineToolName): string | null {
+  if (name !== "spine_close" && name !== "spine_next") return null;
+  const cursor = projection.nodes.find((node) =>
+    node.id.length === projection.cursor.length &&
+    node.id.every((part, index) => part === projection.cursor[index]),
+  );
+  if (cursor === undefined) return "Spine cursor is missing from the derived tree";
+  if (cursor.kind === "RootEpoch") return "no open Spine node is available to close";
+  const pending = unarrivedBirths(projection, projection.cursor);
+  if (pending.length === 0) return null;
+  return `Spawned children ${formatBirths(pending)} have not arrived. Each result arrives as its own message; close this node after they have arrived.`;
+}
+
+/** Why a Spawn child may not return its memory yet, or null: its own children come first. */
+export function childReturnRefusal(projection: SpineProjection): string | null {
+  const pending = unarrivedBirths(projection);
+  if (pending.length === 0) return null;
+  return `Spawned children ${formatBirths(pending)} have not arrived. Each result arrives as its own message; return after they have arrived.`;
 }
 
 export type SpawnChildRunner = (signal: AbortSignal) => Promise<SpawnArrival>;
@@ -40,9 +69,9 @@ interface ChildRun {
 /**
  * The children one parent session owns. A child is tracked from launch until
  * its arrival is admitted: after the run ends its arrival is held, so a birth
- * is never started twice and an arrival Pi dropped can be handed over again.
+ * is never started twice and an arrival the host dropped can be handed over again.
  */
-export class PiSpawnChildren {
+export class SpawnChildren {
   readonly #deliver: DeliverArrival;
   readonly #runs = new Map<string, ChildRun>();
   readonly #handed = new Map<string, SpawnArrival>();
@@ -58,8 +87,8 @@ export class PiSpawnChildren {
 
   /** Starts every birth not yet started; births launched together are peers. */
   launch(
-    births: readonly PiSpawnBirth[],
-    run: (birth: PiSpawnBirth, peers: readonly SpawnTask[], signal: AbortSignal) => Promise<SpawnArrival>,
+    births: readonly SpawnBirth[],
+    run: (birth: SpawnBirth, peers: readonly SpawnTask[], signal: AbortSignal) => Promise<SpawnArrival>,
   ): void {
     const fresh = births.filter((birth) => !this.#tracked(birth.producer));
     const peers = fresh.map((birth) => birth.task);
@@ -67,7 +96,7 @@ export class PiSpawnChildren {
   }
 
   /** Starts one child with its own runner, unless it is already tracked. */
-  start(birth: PiSpawnBirth, runner: SpawnChildRunner, wake = true): void {
+  start(birth: SpawnBirth, runner: SpawnChildRunner, wake = true): void {
     const key = birth.producer.join(".");
     if (this.#tracked(birth.producer)) return;
     const run: ChildRun = { controller: new AbortController(), wake, disposed: false };
@@ -98,11 +127,11 @@ export class PiSpawnChildren {
   /**
    * The agent settled. `open` are the births still pending whose arrival is
    * not in the session's source; arrivals for any other birth reached the
-   * source and are forgotten. After a Stop, Pi drops queued steering messages,
-   * so the rest never reached it and are handed over again without waking the
-   * agent: an arrival enters the source at most once.
+   * source and are forgotten. A stopped agent may have dropped queued
+   * messages, so the rest are handed over again without waking it: an arrival
+   * enters the source at most once.
    */
-  settle(open: readonly PiSpawnBirth[], aborted: boolean): void {
+  settle(open: readonly SpawnBirth[], aborted: boolean): void {
     const keys = new Set(open.map((birth) => birth.producer.join(".")));
     for (const key of [...this.#handed.keys()]) {
       if (!keys.has(key)) this.#handed.delete(key);

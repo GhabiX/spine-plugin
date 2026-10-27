@@ -1,10 +1,11 @@
 import type { Agent, PreStepDecision } from "@deepseek-ai/dsh-agent";
 import { isAppendSurfaceEvent, type SessionEvent, type SessionSeq } from "@deepseek-ai/dsh-session";
-import type { EpochOrdinalId, FeatureFlag, Terminal } from "@spinejit/spine-sdk";
+import type { EpochOrdinalId, FeatureFlag, SpineProjection, Terminal } from "@spinejit/spine-sdk";
 import {
   createHostAdapter,
   isSpineToolName,
   operationFromSpineToolCall,
+  spineToolRefusal,
   type SpineHostAdapter,
   type SpineToolName,
 } from "@spinejit/spine-sdk/host";
@@ -66,6 +67,7 @@ export class SpineAgent {
   readonly #sourceSeqs = new Map<string, SessionSeq>();
   #userSources = 0;
   #plan: PlanItem[] | null = null;
+  #projection: SpineProjection | null = null;
   #sampling: Sampling | null = null;
   #turn = 0;
   #step = 0;
@@ -91,6 +93,7 @@ export class SpineAgent {
           materialize: async (context) => planItems(context, (id) => spine.#seqOf(id), spine.#nodePrompt),
           publishAtomic: async (context) => {
             spine.#plan = [...context.messages];
+            spine.#projection = context.projection;
           },
         },
       },
@@ -159,6 +162,9 @@ export class SpineAgent {
     const sampling = this.#sampling;
     if (sampling === null) throw new SpineDshError(`${name} ran outside a Spine sampling`);
     if (sampling.staged !== null) throw new SpineToolLimitError(sampling.staged);
+    // What the core would refuse at commit is a tool error now, not a fault later.
+    const refusal = spineToolRefusal(this.#projection!, name);
+    if (refusal !== null) throw new SpineDshError(refusal);
     sampling.staged = name;
     await this.#guard(async () => {
       await this.#adapter.registerExecution(callId);

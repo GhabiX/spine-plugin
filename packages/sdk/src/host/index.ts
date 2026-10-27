@@ -1,3 +1,4 @@
+export * from "./children.js";
 export * from "./config.js";
 export * from "./controller.js";
 export * from "./host-adapter.js";

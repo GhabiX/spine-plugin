@@ -144,6 +144,19 @@ test("bad Spine input and a second Spine call are tool errors; the agent keeps w
   assert.equal(run.requests[2][3], node("1.1", "A"));
 });
 
+test("Close with no open node is a tool error; the agent keeps working", async () => {
+  const run = await scenario([
+    [["spine_close", { memory: "m" }]],
+    [["spine_open", { goal: "A" }]],
+    "ok",
+  ], (dsh) => dsh.run("start"));
+  assert.deepEqual(run.ends, ["completed"]);
+  const results = run.events.filter((event) => event.type === "tool/result").map((event) => event.data.message);
+  assert.deepEqual(results.map((message) => message.isError === true), [true, false]);
+  assert.match(results[0].content[0].text, /no open Spine node is available to close/);
+  assert.equal(run.requests[2][3], node("1.1", "A"));
+});
+
 test("disposing an agent mid-request settles its sampling without error", async () => {
   const dsh = await mountDsh([{ hang: true }]);
   const agent = await dsh.ctx.agents.create({
