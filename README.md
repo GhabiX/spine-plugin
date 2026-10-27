@@ -276,7 +276,8 @@ arrival starts the next turn.
 A birth belongs to the session that bore it. A child, or a fork, continues a
 prefix that may hold births still unarrived; there they are inherited context
 (`◌` in the tree): the session neither runs them nor waits for them, and their
-arrivals go only to the session that bore them.
+arrivals go only to the session that bore them. An arrival already in the
+copied prefix is part of it, so the birth counts as arrived there too.
 
 A child's result is its `spine_child_return` call whose own tool result
 succeeded, read from the child's session file, live and after a restart alike.
@@ -293,16 +294,17 @@ without running again; one that had not is offered `Continue` or `Abandon`
 (only `Abandon` without a UI), since the birth prefix is not kept outside the
 child session.
 
-An arrival is held until the core admits it. After a Stop, Pi drops queued
-steering messages, so the held arrivals are handed over again without waking
-the agent. The core admits the same arrival once and refuses a different
-result for a birth that has arrived.
+An arrival is held until it is in the session. After a Stop, Pi drops queued
+steering messages, so the held arrivals that never reached the session are
+handed over again without waking the agent; each arrival enters the session
+once. The core refuses a different result for a birth that has arrived.
 
 Known limitation: Pi 1.1 gives an extension no signal when `abort()` is called
 while the settled agent, without a UI, waits for a child, so that wait ends at
 the next arrival rather than at the abort. Print and JSON modes have no abort
-command, and their children end with the parent process; only an SDK embedding
-that calls `abort()` with `hasUI` false meets this.
+command; Ctrl+C in a terminal also reaches the children, which share the
+parent's process group. Only an SDK embedding that calls `abort()` with
+`hasUI` false meets this.
 
 Three points differ from the confirmed Spawn specification and await
 confirmation. Compaction with an unarrived birth is cancelled with a notice

@@ -1175,7 +1175,7 @@ test("a return the child's admission blocked is not its result", async () => {
   }
 });
 
-test("after a Stop the arrivals Pi dropped are handed over again and admitted once", async () => {
+test("after a Stop only the arrivals Pi dropped are handed over again", async () => {
   const pi = mockPi();
   const branch = recordBranch(pi);
   const ctx = extensionContext("pi-redeliver", { sessionFile: join(await mkdtemp(join(tmpdir(), "pi-spine-redeliver-")), "parent.jsonl"), branch });
@@ -1185,24 +1185,24 @@ test("after a Stop the arrivals Pi dropped are handed over again and admitted on
   await pi.emit("message_end", { type: "message_end", message: user("request") }, ctx.context);
   await sample(pi, ctx, [{ id: "spawn-1", name: "spine_spawn", input: { tasks: SPAWN_TASKS } }]);
   await until(() => pi.sent.length === 2);
-  // Pi queued both as steering messages; a Stop clears that queue.
+  // The first reached the source before the Stop, which cleared the second
+  // from Pi's steering queue; no context was built in between.
+  await pi.emit("message_end", { type: "message_end", message: pi.sent[0][0] }, ctx.context);
   await pi.emit("agent_settled", { type: "agent_settled", aborted: true }, ctx.context);
-  assert.equal(pi.sent.length, 4);
-  assert.deepEqual(pi.sent.slice(2).map(([, options]) => options), [
-    { deliverAs: "steer", triggerTurn: false },
-    { deliverAs: "steer", triggerTurn: false },
-  ]);
-  // Had one copy survived, both reach the source: the core admits an arrival once.
-  for (const [message] of pi.sent) {
-    await pi.emit("message_end", { type: "message_end", message }, ctx.context);
-  }
+  assert.equal(pi.sent.length, 3);
+  assert.deepEqual(pi.sent[2][0].details.arrival, pi.sent[1][0].details.arrival);
+  assert.deepEqual(pi.sent[2][1], { deliverAs: "steer", triggerTurn: false });
+  await pi.emit("message_end", { type: "message_end", message: pi.sent[2][0] }, ctx.context);
   await sample(pi, ctx, [{ id: "open-1", name: "spine_open", input: { goal: "use results" } }]);
   assert.equal(ctx.aborts, 0);
   const after = contents((await pi.emit("context", { type: "context", messages: [] }, ctx.context)).messages);
-  assert.equal(after.filter((text) => /<spine_arrival node_id="1\.1" outcome="completed">/.test(text)).length, 1);
+  for (const id of ["1\\.1", "1\\.2"]) {
+    const arrival = new RegExp(`<spine_arrival node_id="${id}" outcome="completed">`);
+    assert.equal(after.filter((text) => arrival.test(text)).length, 1);
+  }
   // Once admitted, nothing is held any more.
   await pi.emit("agent_settled", { type: "agent_settled", aborted: true }, ctx.context);
-  assert.equal(pi.sent.length, 4);
+  assert.equal(pi.sent.length, 3);
 });
 
 test("without a UI the settled agent waits for a running child, whose arrival starts the next turn", async () => {

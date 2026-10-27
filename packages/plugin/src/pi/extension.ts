@@ -63,6 +63,7 @@ import {
 } from "./lifecycle.js";
 import {
   arrivalMessage,
+  arrivalOf,
   isPiHostSystemMessage,
   materializePiContext,
   projectPiSpineMessages,
@@ -74,7 +75,7 @@ import { resolvePiInvocation } from "./invocation.js";
 import {
   linesComponent,
 } from "./pretty-tree.js";
-import { buildPiReplayPlan, recoverPiSession, type PiBranchEntry } from "./recovery.js";
+import { buildPiReplayPlan, recoverPiSession, type PiBranchEntry, type PiReplaySource } from "./recovery.js";
 import { SpineTreeDisplay } from "./tree-view.js";
 import { SPINE_TREE_VIEW_REQUEST } from "./tree-view-contract.js";
 import { queryPiSpineMode, type PiSpineMode } from "./session-mode.js";
@@ -545,7 +546,11 @@ function registerLifecycleHandlers(
     if (slot.mode !== "sdk" || slot.current === null) return;
     const { children, latestContext } = slot.current;
     if (event.aborted) children.stop();
-    children.settle(unarrivedBirths(latestContext.projection), event.aborted);
+    const entered = enteredArrivals(ctx);
+    children.settle(
+      unarrivedBirths(latestContext.projection).filter((birth) => !entered.has(birth.producer.join("."))),
+      event.aborted,
+    );
     if (event.aborted) return;
     // Without a UI (print mode, Spawn children) Pi exits once the agent settles.
     // Hold it until a running child arrives; that arrival starts the next turn.
@@ -1202,13 +1207,26 @@ function childScope(ctx: ExtensionContext): ChildSessionScope {
 }
 
 /** Names each birth by the Pi entry at its sampling's first source boundary on the current branch. */
-function birthRefs(ctx: ExtensionContext, births: readonly PiSpawnBirth[]): ChildBirthRef[] {
-  const entries = new Map(buildPiReplayPlan({
+/** The session's branch as the Spine sources it holds, each with its Pi entry. */
+function branchSources(ctx: ExtensionContext): PiReplaySource[] {
+  return buildPiReplayPlan({
     currentSessionId: ctx.sessionManager.getSessionId(),
     branch: ctx.sessionManager.getBranch(),
     messagesForEntry: (entry) =>
       sessionEntryToContextMessages(entry as SessionEntry) as PiAgentMessage[],
-  }).sources.map((source) => [source.boundary, source.entryId]));
+  }).sources;
+}
+
+/** Producers whose arrival is in the session's source, admitted or not yet committed. */
+function enteredArrivals(ctx: ExtensionContext): Set<string> {
+  return new Set(branchSources(ctx).flatMap((source) => {
+    const arrival = arrivalOf(source.message);
+    return arrival === null ? [] : [arrival.producer.join(".")];
+  }));
+}
+
+function birthRefs(ctx: ExtensionContext, births: readonly PiSpawnBirth[]): ChildBirthRef[] {
+  const entries = new Map(branchSources(ctx).map((source) => [source.boundary, source.entryId]));
   return births.map((birth) => {
     const origin = entries.get(birth.start);
     if (origin === undefined || origin === null) {

@@ -96,15 +96,16 @@ export class PiSpawnChildren {
   }
 
   /**
-   * The agent settled. Arrivals whose births are no longer pending were
-   * admitted and are forgotten. After a Stop, Pi drops queued steering
-   * messages, so the rest are handed over again without waking the agent;
-   * the core admits a repeated arrival once.
+   * The agent settled. `open` are the births still pending whose arrival is
+   * not in the session's source; arrivals for any other birth reached the
+   * source and are forgotten. After a Stop, Pi drops queued steering messages,
+   * so the rest never reached it and are handed over again without waking the
+   * agent: an arrival enters the source at most once.
    */
-  settle(pending: readonly PiSpawnBirth[], aborted: boolean): void {
-    const open = new Set(pending.map((birth) => birth.producer.join(".")));
+  settle(open: readonly PiSpawnBirth[], aborted: boolean): void {
+    const keys = new Set(open.map((birth) => birth.producer.join(".")));
     for (const key of [...this.#handed.keys()]) {
-      if (!open.has(key)) this.#handed.delete(key);
+      if (!keys.has(key)) this.#handed.delete(key);
     }
     if (!aborted) return;
     for (const arrival of this.#handed.values()) this.#deliver(arrival, false);
