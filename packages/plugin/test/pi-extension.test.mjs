@@ -212,7 +212,9 @@ function assistant(content, stopReason = "stop") {
   };
 }
 
-// Pi ends every model request with turn_end; a cancelled one admits no assistant message.
+// Pi ends every model request with turn_end. This is a synthetic boundary that only
+// separates context projections: a real Pi cancel first emits message_end for the
+// aborted assistant, which Spine observes as a source.
 async function cancelTurn(pi, ctx) {
   await pi.emit("turn_end", { type: "turn_end", turnIndex: 0, message: assistant([], "aborted"), toolResults: [] }, ctx.context);
 }
