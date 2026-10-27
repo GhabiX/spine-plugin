@@ -21,7 +21,7 @@ export class ScriptedAdapter extends LlmAdapter {
    * @param replies one per request, or an object of such lists by session id
    *   when several sessions run: a string is text, an array is tool calls
    *   `[name, input]`, `{ text, finish }` is text that ends with that finish
-   *   kind, `{ fail }` throws that message, `{ hang: true }` waits for the
+   *   kind (null: the stream ends without a finish chunk), `{ fail }` throws that message, `{ hang: true }` waits for the
    *   request to be aborted, and a function of the request returns the reply.
    */
   constructor(replies) {
@@ -55,6 +55,7 @@ export class ScriptedAdapter extends LlmAdapter {
       yield { type: "block-start", index, blockType: block.type };
       yield { type: "block-end", index, block };
     }
+    if (reply.finish === null) return;
     yield { type: "finish", reason: { kind: reply.finish ?? (text !== undefined ? "stop" : "tool-calls") } };
   }
 }

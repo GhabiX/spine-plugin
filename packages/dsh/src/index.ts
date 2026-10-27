@@ -57,15 +57,12 @@ export function apply(ctx: Context): void {
     agent.ctx.effect(() => async () => {
       // Its children stop and deliver nothing; a resumed session recovers them.
       own.dispose();
-      // A cancelled turn reaches no stopping or error hook; it settles here or at the next pre-step.
+      // The turn in flight keeps its Spine state until it stops. An open
+      // sampling needs no settling here: its stretch is in the log.
       await agent.whenIdle();
-      try {
-        await spine.settle();
-      } finally {
-        agents.delete(agent.id);
-        children.delete(agent.id);
-        spine.dispose();
-      }
+      agents.delete(agent.id);
+      children.delete(agent.id);
+      spine.dispose();
     });
   });
   ctx.on("agent/status", ({ agent, status }) => {
@@ -88,13 +85,6 @@ export function apply(ctx: Context): void {
     await agents.get(payload.agent.id)?.enterStep(payload.turn, payload.step);
     return next();
   }, { prepend: true });
-  ctx.on("agent/turn-stopping", async ({ agent }) => {
-    await agents.get(agent.id)?.settle();
-  });
-  ctx.on("agent/request-error", async (payload, next) => {
-    await agents.get(payload.agent.id)?.settle();
-    return next();
-  }, { prepend: true });
   ctx.on("llm/stream", (request, next) => {
     const spine = isAgentLoopRequest(request) && request.sessionId !== undefined ? agents.get(request.sessionId) : undefined;
     if (spine === undefined) return next();
@@ -114,7 +104,7 @@ function lastTurnAborted(agent: Agent): boolean {
   return false;
 }
 
-/** A Spine tool only stages its operation; the sampling commits it when it settles. */
+/** A Spine tool only admits its call; its sampling stages and commits it when it settles. */
 function spineTool(spec: SpineToolSpec, agents: ReadonlyMap<string, SpineAgent>): ToolDefinition {
   const name = `spine_${spec.id}`;
   if (!isSpineToolName(name)) throw new SpineDshError(`unknown Spine tool ${name}`);
@@ -130,7 +120,7 @@ function spineTool(spec: SpineToolSpec, agents: ReadonlyMap<string, SpineAgent>)
       if (exec.parent !== undefined) throw new SpineDshError(`${name} must be called by the model directly, not from code`);
       const spine = exec.agent === undefined ? undefined : agents.get(exec.agent.id);
       if (spine === undefined) throw new SpineDshError(`${name} was called outside a Spine agent`);
-      await spine.stage(name, exec.callId, args as Record<string, unknown>);
+      spine.admit(name, args as Record<string, unknown>);
       return { staged: name };
     },
   };

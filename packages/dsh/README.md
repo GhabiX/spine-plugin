@@ -7,10 +7,13 @@ loads it as the Cordis plugin `spinejit`.
 ## How it works
 
 - The model context is the DSH session surface. Each main-loop model request
-  is one Spine sampling. It settles at the next pre-step, at turn-stopping, at
-  a request error, or when the agent is disposed (a cancelled turn reaches
-  neither hook). The log decides the outcome: cancelled if the turn aborted,
-  completed if a response was logged, failed otherwise.
+  is one Spine sampling. In the log it runs from its marked slot (below) to the
+  next sampling's slot or to the end of its step, and only that stretch
+  decides it: completed if its response was logged whole, cancelled if the
+  response was interrupted, failed if none was logged. A Stop after the
+  response was logged does not change it. The plugin settles the open
+  sampling before the next step and before a retried request; when it
+  settles does not change the result.
 - Before each request streams, the plugin appends two empty developer slots.
   They derive no model message and leave room for what the sampling's Open,
   Close or Next puts in front of its response. The first is marked
@@ -26,16 +29,17 @@ loads it as the Cordis plugin `spinejit`.
   are not Spine sources and stay where DSH puts them.
 - Before a request streams, the plugin checks that the surface already shows
   the plan with the right user numbers, and refuses the request otherwise.
-- Spine tools only stage their operation, and a model response may carry one
-  Spine tool call; a second one is a tool error. A reply is a response that
-  stopped by itself with text and no tool call; text cut off at max tokens is
-  an ordinary assistant message.
+- A Spine tool call only checks its input. The sampling stages the call whose
+  logged result is not an error, so a result another extension turns into an
+  error (a `tools/post-execute` block) commits nothing. A model response may
+  carry one Spine tool call; a second one is a tool error. A reply is a
+  response that stopped by itself (a stream that ends without a finish chunk
+  did) with text and no tool call; text cut off at max tokens is an ordinary
+  assistant message.
 - The session log is the only record of Spine state; the plugin writes no
   archive of its own (DSH reserves plugin records for its own experimental
-  packages). Where each sampling began, the Spine call whose result was not an
-  error and what the log shows of the response decide every commit. A resumed
-  session runs the same lifecycle over its log: a sampling settles before the
-  next request, step or turn, as it did live, or at the end of the log. A
+  packages). A resumed session settles each sampling over the same stretch
+  of its log with the same code, or up to the end of the log. A
   session whose conversation started without this plugin is refused: its user
   messages carry no `[U#]`.
 - Spawn: each child is a subagent in the same world, forked from its parent's

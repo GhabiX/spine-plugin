@@ -20,6 +20,7 @@ import {
   arrivalOf,
   beginsSampling,
   emptySlot,
+  endsSampling,
   eventMessage,
   isUserSource,
   samplingSlot,
@@ -49,19 +50,28 @@ export class SpineToolLimitError extends Error {
 interface Sampling {
   /** Log seq of the slot that began the sampling. */
   from: number;
-  staged: SpineToolName | null;
+  /** The Spine call its response made, admitted live. */
+  called: SpineToolName | null;
+}
+
+/** A Spine tool call as logged. */
+interface SpineCall {
+  name: SpineToolName;
+  callId: string;
+  args: string;
 }
 
 /**
  * The Spine state of one DSH agent. One main-loop model request is one Spine
- * sampling: it begins with a marked empty slot in front of the response and
- * settles at the next pre-step, at turn-stopping, at a request error, or when
- * the agent is disposed. The surface follows the plan the core last published,
- * edited when the next step opens.
+ * sampling: it begins with a marked empty slot in front of the response, and
+ * its stretch of the log runs to the next sampling's slot or to the end of its
+ * step. The surface follows the plan the core last published, edited when the
+ * next step opens.
  *
- * The session log is the only record of this state. Where each sampling began,
- * which Spine call it staged and what the log shows of its response decide
- * every commit, so a resumed agent runs the same lifecycle over the log.
+ * The session log is the only record of this state. A sampling settles from
+ * its stretch alone: the sources in it, the Spine call whose logged result is
+ * not an error, and its response. Live and resumed agents settle it with the
+ * same code, and when it settles does not change the result.
  */
 export class SpineAgent {
   readonly #agent: Agent;
@@ -170,10 +180,9 @@ export class SpineAgent {
 
   /** A main-loop request is about to stream. Its messages must be the plan; it begins a sampling. */
   async beginSampling(): Promise<void> {
+    // A request retried in the same step ends the failed one's stretch.
+    await this.settle();
     await this.#guard(async () => {
-      if (this.#sampling !== null) {
-        throw new SpineDshError("a model request started before the previous Spine sampling settled");
-      }
       await this.#prepare();
       this.#assertSurfaceShowsPlan();
       const session = this.#agent.session;
@@ -187,27 +196,26 @@ export class SpineAgent {
     });
   }
 
-  /** Stage one Spine tool call of the current sampling. */
-  async stage(name: SpineToolName, callId: string, args: Record<string, unknown>): Promise<void> {
+  /**
+   * Admit one Spine tool call of the current sampling, or throw the tool error
+   * the model sees. The sampling stages it when it settles, if its logged
+   * result is not an error.
+   */
+  admit(name: SpineToolName, args: Record<string, unknown>): void {
     if (this.fault !== null) throw new SpineDshError("Spine context is faulted", { cause: this.fault });
-    const operation = operationFromSpineToolCall(name, args);
+    operationFromSpineToolCall(name, args);
     const sampling = this.#sampling;
     if (sampling === null) throw new SpineDshError(`${name} ran outside a Spine sampling`);
-    if (sampling.staged !== null) throw new SpineToolLimitError(sampling.staged);
+    if (sampling.called !== null) throw new SpineToolLimitError(sampling.called);
     // What the core would refuse at commit is a tool error now, not a fault later.
     const refusal = spineToolRefusal(this.#projection!, name, this.#entered);
     if (refusal !== null) throw new SpineDshError(refusal);
-    sampling.staged = name;
-    await this.#guard(async () => {
-      await this.#adapter.registerExecution(callId);
-      await this.#adapter.stageExecution(callId, callId, operation);
-      await this.#adapter.finishExecution(callId, true);
-    });
+    sampling.called = name;
   }
 
-  /** Settle the open sampling, if any, from what the log says happened to it. */
+  /** Settle the open sampling, if any, over its stretch of the log so far. */
   async settle(): Promise<void> {
-    await this.#settle(this.#agent.session.seq);
+    if (this.#sampling !== null) await this.#settle(this.#end(this.#sampling.from));
   }
 
   dispose(): void {
@@ -215,20 +223,16 @@ export class SpineAgent {
   }
 
   /**
-   * Run the sampling lifecycle over a logged session, in log order. Each
-   * sampling begins at its marked slot, stages the Spine call whose result was
-   * not an error, and settles where the live agent settled it: before the next
-   * request, step or turn, or at the end of the log. A forked session
-   * continues in its own namespace where its inherited prefix ends.
+   * Run the sampling lifecycle over a logged session, in log order: each
+   * sampling begins at its marked slot and settles where its stretch ends,
+   * or at the end of the log. A forked session continues in its own
+   * namespace where its inherited prefix ends.
    */
   async #recover(events: readonly SessionEvent[]): Promise<void> {
-    const calls = new Map<string, Extract<SessionEvent, { type: "tool/call" }>>();
     const cut = inheritedCut(events);
     this.#recovering = true;
     for (const event of events) {
-      if (beginsSampling(event) || event.type === "step/start" || event.type === "turn/start" || event.seq === cut) {
-        await this.#settle(event.seq);
-      }
+      if (endsSampling(event) || event.seq === cut) await this.#settle(event.seq);
       if (event.seq === cut) await this.#guard(() => this.#continueNamespace(event.seq));
       this.accept(event);
       if (isUserSource(event) && anchorOf(eventMessage(event)) === null) {
@@ -239,13 +243,6 @@ export class SpineAgent {
           await this.#prepare();
           await this.#begin(event.seq);
         });
-      } else if (event.type === "tool/call" && isSpineToolName(event.data.name)) {
-        calls.set(event.data.callId, event);
-      } else if (event.type === "tool/result" && event.data.message.isError !== true) {
-        const call = calls.get(event.data.message.toolCallId);
-        if (call !== undefined && isSpineToolName(call.data.name)) {
-          await this.stage(call.data.name, call.data.callId, JSON.parse(call.data.arguments) as Record<string, unknown>);
-        }
       }
     }
     await this.settle();
@@ -270,22 +267,38 @@ export class SpineAgent {
 
   async #begin(from: number): Promise<void> {
     await this.#adapter.beginSampling();
-    this.#sampling = { from, staged: null };
+    this.#sampling = { from, called: null };
   }
 
-  /** Settle the open sampling with the log before `to`. */
+  /** Where the stretch of the sampling that began at `from` ends, as logged so far. */
+  #end(from: number): number {
+    const next = this.#agent.session.seq;
+    for (let seq = from + 1; seq < next; seq += 1) {
+      if (endsSampling(this.#event(seq))) return seq;
+    }
+    return next;
+  }
+
+  /** Settle the open sampling with its stretch of the log, which ends before `to`. */
   async #settle(to: number): Promise<void> {
     const sampling = this.#sampling;
     if (sampling === null) return;
     await this.#guard(async () => {
+      const call = this.#spineCall(sampling.from, to);
+      if (call !== null) {
+        const operation = operationFromSpineToolCall(call.name, JSON.parse(call.args) as Record<string, unknown>);
+        await this.#adapter.registerExecution(call.callId);
+        await this.#adapter.stageExecution(call.callId, call.callId, operation);
+        await this.#adapter.finishExecution(call.callId, true);
+      }
       await this.#observe(to);
-      const outcome = this.#outcome(sampling, to);
+      const outcome = this.#outcome(sampling.from, to);
       const result = await this.#adapter.finishSampling(outcome.terminal, outcome.inputTokens);
       this.#sampling = null;
       if (result.type !== "committed") return;
       this.#projection = result.projection;
       // The children a live Spawn bore start from the log before its sampling.
-      if (!this.#recovering && sampling.staged === "spine_spawn") this.#born(this.openBirths(), sampling.from);
+      if (!this.#recovering && call?.name === "spine_spawn") this.#born(this.openBirths(), sampling.from);
     });
   }
 
@@ -339,20 +352,34 @@ export class SpineAgent {
     return event;
   }
 
-  /** Cancelled if the turn aborted; completed if a response was logged; failed otherwise. */
-  #outcome(sampling: Sampling, to: number): { terminal: Terminal; inputTokens?: number } {
-    let terminal: Terminal = "failed";
-    let inputTokens: number | undefined;
-    for (let seq = sampling.from; seq < to; seq += 1) {
-      const event = this.#events.get(seq);
-      if (event?.type === "assistant/message") {
-        terminal = event.data.interrupted === true ? "cancelled" : "completed";
-        inputTokens = event.data.usage?.inputTokens;
-      } else if (event?.type === "turn/end" && event.data.reason.kind === "aborted") {
-        terminal = "cancelled";
+  /** The Spine call in the stretch [from, to) whose logged result is not an error, if any. */
+  #spineCall(from: number, to: number): SpineCall | null {
+    const calls = new Map<string, SpineCall>();
+    for (let seq = from; seq < to; seq += 1) {
+      const event = this.#event(seq);
+      if (event.type === "tool/call" && isSpineToolName(event.data.name)) {
+        calls.set(event.data.callId, { name: event.data.name, callId: event.data.callId, args: event.data.arguments });
+      } else if (event.type === "tool/result" && event.data.message.isError !== true) {
+        const call = calls.get(event.data.message.toolCallId);
+        if (call !== undefined) return call;
       }
     }
-    return inputTokens === undefined ? { terminal } : { terminal, inputTokens };
+    return null;
+  }
+
+  /**
+   * A sampling ends as its response did: completed when it was logged whole,
+   * cancelled when it was interrupted, failed when none was logged.
+   */
+  #outcome(from: number, to: number): { terminal: Terminal; inputTokens?: number } {
+    for (let seq = from; seq < to; seq += 1) {
+      const event = this.#event(seq);
+      if (event.type !== "assistant/message") continue;
+      const terminal: Terminal = event.data.interrupted === true ? "cancelled" : "completed";
+      const inputTokens = event.data.usage?.inputTokens;
+      return inputTokens === undefined ? { terminal } : { terminal, inputTokens };
+    }
+    return { terminal: "failed" };
   }
 
   async #guard<T>(operation: () => Promise<T>): Promise<T> {

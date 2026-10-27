@@ -70,14 +70,13 @@ test("a session that started without Spine is refused, not adopted with unnumber
   }
 });
 
-test("restarting before every turn changes nothing the model sees", async () => {
-  const turns = [
-    ["start", [[["spine_open", { goal: "A" }]], "r1"]],
-    ["more", [[["spine_next", { memory: "mA", goal: "B" }]], { fail: "boom" }]],
-    ["again", [{ text: "cut", finish: "max-tokens" }]],
-    ["last", [[["spine_open", { goal: "C" }]], [["spine_close", { memory: "mC" }]], [["spine_close", { memory: "mB" }]], "done"]],
-  ];
+/**
+ * Run `turns` in one world, and again in a new world before every turn that
+ * resumes the session; `setup` prepares each world.
+ */
+async function bothWays(turns, setup = () => {}) {
   const once = await mountDsh(turns.flatMap(([, replies]) => replies));
+  setup(once);
   let continuous;
   try {
     const agent = await once.run(turns[0][0]);
@@ -93,6 +92,7 @@ test("restarting before every turn changes nothing the model sees", async () => 
   let last;
   for (const [index, [text, replies]] of turns.entries()) {
     const dsh = await mountDsh(replies, { root });
+    setup(dsh);
     try {
       if (index === 0) {
         id = (await dsh.run(text)).id;
@@ -108,8 +108,57 @@ test("restarting before every turn changes nothing the model sees", async () => 
       await dsh.dispose();
     }
   }
+  return { continuous, restarted: { requests, ends: last } };
+}
+
+test("restarting before every turn changes nothing the model sees", async () => {
+  const { continuous, restarted } = await bothWays([
+    ["start", [[["spine_open", { goal: "A" }]], "r1"]],
+    ["more", [[["spine_next", { memory: "mA", goal: "B" }]], { fail: "boom" }]],
+    ["again", [{ text: "cut", finish: "max-tokens" }]],
+    ["last", [[["spine_open", { goal: "C" }]], [["spine_close", { memory: "mC" }]], [["spine_close", { memory: "mB" }]], "done"]],
+  ]);
   assert.deepEqual(continuous.ends, ["completed", "error", "max-tokens", "completed"]);
-  assert.deepEqual({ requests, ends: last }, continuous);
+  assert.deepEqual(restarted, continuous);
+});
+
+test("a Spine call whose result another extension turns into an error commits nothing", async () => {
+  const { continuous, restarted } = await bothWays(
+    [["start", [[["spine_open", { goal: "A" }]], "done"]], ["more", ["ok"]]],
+    (dsh) => dsh.ctx.on("tools/post-execute", (exec, result, next) => exec.name === "spine_open"
+      ? Promise.resolve({ kind: "block", feedback: [{ type: "text", text: "blocked" }] })
+      : next()),
+  );
+  assert.deepEqual(restarted, continuous);
+  assert.deepEqual(continuous.requests[1], ["user: [U1]\nstart", call("spine_open", { goal: "A" }), "tool: blocked"]);
+  assert.ok(!continuous.requests.flat().includes(node("1.1", "A")));
+});
+
+test("a Stop after the response was logged: live and resumed sessions agree, and its reply survives Close", async () => {
+  const { continuous, restarted } = await bothWays(
+    [
+      ["start", [[["spine_open", { goal: "A" }]], "replyA"]],
+      ["more", [[["spine_close", { memory: "mA" }]], "done"]],
+    ],
+    (dsh) => dsh.ctx.on("agent/turn-stopping", ({ agent }) => {
+      const last = agent.session.snapshotEvents().findLast((event) => event.type === "assistant/message");
+      if (last.data.message.content[0].text === "replyA") agent.cancel({ kind: "user" });
+    }),
+  );
+  assert.deepEqual(continuous.ends, ["aborted", "completed"]);
+  assert.deepEqual(restarted, continuous);
+  assert.ok(continuous.requests.at(-1).includes("assistant: replyA"));
+});
+
+test("a stream that ends without a finish chunk stopped by itself: its reply survives Close", async () => {
+  const { continuous, restarted } = await bothWays([
+    ["start", [[["spine_open", { goal: "A" }]], { text: "replyA", finish: null }]],
+    ["more", [[["spine_close", { memory: "mA" }]], "done"]],
+  ]);
+  assert.deepEqual(restarted, continuous);
+  assert.deepEqual(continuous.requests.at(-1), [
+    "user: [U1]\nstart", "assistant: replyA", "user: [U2]\nmore", memory("1.1", "mA"), call("spine_close", { memory: "mA" }), staged("spine_close"),
+  ]);
 });
 
 function ends(agent) {

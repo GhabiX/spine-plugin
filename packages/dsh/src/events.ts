@@ -128,6 +128,11 @@ export function beginsSampling(event: SessionEvent): boolean {
   return source.kind === "spine" && source.sampling === true;
 }
 
+/** Where an open sampling's stretch of the log ends: the next sampling begins, or its step ends. */
+export function endsSampling(event: SessionEvent): boolean {
+  return beginsSampling(event) || event.type === "step/end";
+}
+
 /** A Spawn child's arrival as the message its parent receives. */
 export function arrivalMessage(arrival: SpawnArrival): UserMessage {
   return createUserMessage({ content: [{ type: "text", text: spineArrivalText(arrival) }], source: { kind: "spine-arrival", arrival } });
@@ -150,10 +155,14 @@ export function spineText(message: Message): string | null {
   return message.content.length === 0 ? null : contentText(message.content);
 }
 
-/** The agent's reply to the user: the response stopped by itself, with text and no tool call. */
+/**
+ * The agent's reply to the user: the response stopped by itself, with text and
+ * no tool call. A stream that ends without a finish chunk stopped by itself;
+ * DSH logs a finish for every failed or aborted one.
+ */
 function isReply(event: Extract<SessionEvent, { type: "assistant/message" }>): boolean {
   const content = event.data.message.content;
-  return lastAssistantStreamChunk(event.data.stream, "finish")?.reason.kind === "stop" &&
+  return (lastAssistantStreamChunk(event.data.stream, "finish")?.reason.kind ?? "stop") === "stop" &&
     event.data.interrupted !== true &&
     content.every((block) => block.type !== "tool-call") &&
     content.some((block) => block.type === "text" && block.text.trim().length > 0);
