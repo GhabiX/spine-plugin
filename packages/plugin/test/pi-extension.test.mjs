@@ -212,6 +212,11 @@ function assistant(content, stopReason = "stop") {
   };
 }
 
+// Pi ends every model request with turn_end; a cancelled one admits no assistant message.
+async function cancelTurn(pi, ctx) {
+  await pi.emit("turn_end", { type: "turn_end", turnIndex: 0, message: assistant([], "aborted"), toolResults: [] }, ctx.context);
+}
+
 test("durable context-only custom messages enter canonical context once and preserve replay order", async () => {
   const branch = [];
   const pi = mockPi();
@@ -222,7 +227,9 @@ test("durable context-only custom messages enter canonical context once and pres
     content: "version one", display: false, timestamp: "2026-09-26T00:00:00.000Z" };
   branch.push(custom); // Pi's context-only flush does not call extension message_end.
   const first = await pi.emit("context", { type: "context", messages: [] }, ctx.context);
+  await cancelTurn(pi, ctx);
   const second = await pi.emit("context", { type: "context", messages: [] }, ctx.context);
+  await cancelTurn(pi, ctx);
   assert.deepEqual(first, second);
   assert.equal(first.messages.filter(message => message.customType === "ordinary-resource").length, 1);
   branch.push({ ...custom, id: "custom-2", content: "version two" });
@@ -273,7 +280,6 @@ test("custom steering after a silent durable message preserves sources and commi
     assert.deepEqual(projected.messages.map(message => message.content), ["silent A", "queued B"]);
   });
 
-  await pi.emit("before_provider_request", { type: "before_provider_request", payload: {} }, ctx.context);
   const done = assistant([{ type: "text", text: "acknowledged both updates" }]);
   await pi.emit("message_end", { type: "message_end", message: done }, ctx.context);
   branch.push({ type: "message", id: "done", message: done });
@@ -342,7 +348,7 @@ test("canonical Pi extension is also a SpineHost owner plugin", async () => {
     ["spine_close", "spine_next", "spine_open", "spine_spawn"],
   );
   assert.ok(pi.handlers.has("context"));
-  assert.ok(pi.handlers.has("before_provider_request"));
+  assert.ok(pi.handlers.has("turn_end"));
 });
 
 test("before_agent_start composes the configured prompt and registers its tool catalog", async () => {
@@ -538,11 +544,7 @@ test("session_tree resets a prior lifecycle fault", async () => {
 async function finishHeadlessSampling(pi, ctx) {
   await pi.emit("session_start", { type: "session_start", reason: "new" }, ctx.context);
   await pi.emit("message_end", { type: "message_end", message: user("private task content") }, ctx.context);
-  await pi.emit(
-    "before_provider_request",
-    { type: "before_provider_request", payload: { input: ["private provider payload"] } },
-    ctx.context,
-  );
+  await pi.emit("context", { type: "context", messages: [] }, ctx.context);
   const done = assistant([{ type: "text", text: "done" }]);
   await pi.emit("message_end", { type: "message_end", message: done }, ctx.context);
   await pi.emit("turn_end", { type: "turn_end", turnIndex: 0, message: done }, ctx.context);
@@ -669,11 +671,7 @@ test("user abort of a host tool does not latch a fault on a stray follow-up turn
   };
   await pi.emit("before_agent_start", firstPrompt, ctx.context);
   assert.match(firstPrompt.systemPromptOptions.appendSystemPrompt, /spine_open/);
-  await pi.emit(
-    "before_provider_request",
-    { type: "before_provider_request", payload: { model: "test", input: ["investigate"] } },
-    ctx.context,
-  );
+  await pi.emit("context", { type: "context", messages: [] }, ctx.context);
 
   const callMessage = assistant(
     [{ type: "toolCall", id: "bash-1", name: "bash", arguments: { command: "find /data /home" } }],
@@ -736,11 +734,7 @@ test("user abort of a host tool does not latch a fault on a stray follow-up turn
   };
   await pi.emit("before_agent_start", continued, ctx.context);
   assert.match(continued.systemPromptOptions.appendSystemPrompt, /spine_open/);
-  await pi.emit(
-    "before_provider_request",
-    { type: "before_provider_request", payload: { model: "test", input: ["continue"] } },
-    ctx.context,
-  );
+  await pi.emit("context", { type: "context", messages: [] }, ctx.context);
   const done = assistant([{ type: "text", text: "ok" }], "stop");
   await pi.emit("message_end", { type: "message_end", message: done }, ctx.context);
   await pi.emit("turn_end", { type: "turn_end", turnIndex: 2, message: done }, ctx.context);
@@ -751,6 +745,77 @@ test("user abort of a host tool does not latch a fault on a stray follow-up turn
     pi.entries.filter((entry) => entry.customType === "spine.archive.v1").length,
     4,
   );
+});
+
+test("Pi cache-warming replays are not samplings, during a tool call or after the run settles", async () => {
+  // Pi's CacheWarmer re-sends the last request with maxTokens: 1 and the same
+  // onPayload, so before_provider_request fires without a context hook: while
+  // a long tool call runs ("streaming") and after turn_end ("idle").
+  const pi = mockPi();
+  const ctx = extensionContext("cache-warm");
+  const commits = [];
+  createPiExtension({ onSamplingCommit(info) { commits.push(info.commit); } })(pi.api);
+  const warm = () => pi.emit(
+    "before_provider_request",
+    { type: "before_provider_request", payload: { model: "test", max_tokens: 1 } },
+    ctx.context,
+  );
+  const request = async () => {
+    await pi.emit("context", { type: "context", messages: [] }, ctx.context);
+    await pi.emit("before_provider_request", { type: "before_provider_request", payload: { model: "test" } }, ctx.context);
+  };
+
+  await pi.emit("session_start", { type: "session_start", reason: "new" }, ctx.context);
+  await pi.emit("message_end", { type: "message_end", message: user("sleep 300") }, ctx.context);
+  await request();
+  const callMessage = assistant(
+    [{ type: "toolCall", id: "bash-1", name: "bash", arguments: { command: "sleep 300" } }],
+    "toolUse",
+  );
+  await pi.emit("message_end", { type: "message_end", message: callMessage }, ctx.context);
+  await pi.emit("tool_call", { type: "tool_call", toolCallId: "bash-1", toolName: "bash", input: { command: "sleep 300" } }, ctx.context);
+  await warm();
+  assert.equal(ctx.aborts, 0, JSON.stringify(ctx.notifications));
+  const toolResult = {
+    role: "toolResult",
+    toolCallId: "bash-1",
+    toolName: "bash",
+    content: [{ type: "text", text: "" }],
+    isError: false,
+    timestamp: 3,
+  };
+  await pi.emit("tool_result", { type: "tool_result", toolCallId: "bash-1", toolName: "bash",
+    input: { command: "sleep 300" }, content: toolResult.content, details: {}, isError: false }, ctx.context);
+  await pi.emit("message_end", { type: "message_end", message: toolResult }, ctx.context);
+  await pi.emit("turn_end", { type: "turn_end", turnIndex: 0, message: callMessage, toolResults: [toolResult] }, ctx.context);
+  await warm();
+
+  await request();
+  const done = assistant([{ type: "text", text: "slept" }]);
+  await pi.emit("message_end", { type: "message_end", message: done }, ctx.context);
+  await pi.emit("turn_end", { type: "turn_end", turnIndex: 1, message: done, toolResults: [] }, ctx.context);
+
+  assert.equal(ctx.aborts, 0, JSON.stringify(ctx.notifications));
+  assert.deepEqual(pi.entries.filter(entry => entry.customType === "spine.fault.v1"), []);
+  assert.deepEqual(commits.map(commit => commit.type), ["committed", "committed"]);
+  assert.deepEqual(pi.entries.filter(entry => entry.customType === "spine.archive.v1")
+    .map(entry => entry.data.record.type), ["sampling_started", "sampling_commit", "sampling_started", "sampling_commit"]);
+});
+
+test("a model request while the prior sampling is still open faults", async () => {
+  const pi = mockPi();
+  const ctx = extensionContext("missed-turn-end");
+  createPiExtension()(pi.api);
+  await pi.emit("session_start", { type: "session_start", reason: "new" }, ctx.context);
+  await pi.emit("message_end", { type: "message_end", message: user("first") }, ctx.context);
+  await pi.emit("context", { type: "context", messages: [] }, ctx.context);
+  assert.equal(ctx.aborts, 0);
+  assert.deepEqual(await pi.emit("context", { type: "context", messages: [] }, ctx.context), { messages: [] });
+  assert.equal(ctx.aborts, 1);
+  const faults = pi.entries.filter(entry => entry.customType === "spine.fault.v1");
+  assert.equal(faults.length, 1);
+  assert.equal(faults[0].data.hook, "context");
+  assert.match(faults[0].data.errors.at(-1).message, /before the prior turn ended/);
 });
 
 test("Spawn child invocation inherits parent extensions and preserves the prompt argument", async () => {
@@ -791,11 +856,7 @@ test("Spawn child invocation inherits parent extensions and preserves the prompt
   };
   createPiExtension()(pi.api);
   await pi.emit("session_start", { type: "session_start", reason: "new" }, ctx.context);
-  await pi.emit(
-    "before_provider_request",
-    { type: "before_provider_request", payload: { input: [] } },
-    ctx.context,
-  );
+  await pi.emit("context", { type: "context", messages: [] }, ctx.context);
   await pi.emit(
     "tool_call",
     {
@@ -873,11 +934,7 @@ test("Spawn records typed nonzero child memory as an errored receipt", async () 
   });
   createPiExtension()(typed.api);
   await typed.emit("session_start", { type: "session_start", reason: "new" }, typedCtx.context);
-  await typed.emit(
-    "before_provider_request",
-    { type: "before_provider_request", payload: { input: [] } },
-    typedCtx.context,
-  );
+  await typed.emit("context", { type: "context", messages: [] }, typedCtx.context);
   await typed.emit(
     "tool_call",
     {
@@ -941,11 +998,7 @@ test("Spawn records mixed receipts when one child omits typed return", async () 
   };
   createPiExtension()(pi.api);
   await pi.emit("session_start", { type: "session_start", reason: "new" }, ctx.context);
-  await pi.emit(
-    "before_provider_request",
-    { type: "before_provider_request", payload: { input: [] } },
-    ctx.context,
-  );
+  await pi.emit("context", { type: "context", messages: [] }, ctx.context);
   await pi.emit(
     "tool_call",
     {
@@ -1034,11 +1087,7 @@ test("Spawn Continue reuses the same session and restores missing assignment con
   };
   createPiExtension()(pi.api);
   await pi.emit("session_start", { type: "session_start", reason: "new" }, ctx.context);
-  await pi.emit(
-    "before_provider_request",
-    { type: "before_provider_request", payload: { input: [] } },
-    ctx.context,
-  );
+  await pi.emit("context", { type: "context", messages: [] }, ctx.context);
   const tasks = [
     { summary: "child", prompt: "recover exact work" },
     { summary: "peer", prompt: "complete peer work" },
@@ -1086,11 +1135,7 @@ test("Pi exec rejection remains host-fatal and does not open the recovery gate",
   };
   createPiExtension()(pi.api);
   await pi.emit("session_start", { type: "session_start", reason: "new" }, ctx.context);
-  await pi.emit(
-    "before_provider_request",
-    { type: "before_provider_request", payload: { input: [] } },
-    ctx.context,
-  );
+  await pi.emit("context", { type: "context", messages: [] }, ctx.context);
   await pi.emit(
     "tool_call",
     {
@@ -1127,11 +1172,7 @@ test("root close and next return to the model without aborting", async () => {
 
   await pi.emit("session_start", { type: "session_start", reason: "new" }, ctx.context);
   await pi.emit("message_end", { type: "message_end", message: user("request") }, ctx.context);
-  await pi.emit(
-    "before_provider_request",
-    { type: "before_provider_request", payload: { model: "test", input: ["request"] } },
-    ctx.context,
-  );
+  await pi.emit("context", { type: "context", messages: [] }, ctx.context);
   const closeAdmission = await pi.emit(
     "tool_call",
     { type: "tool_call", toolCallId: "close-1", toolName: "spine_close", input: { memory: "done" } },
@@ -1176,11 +1217,6 @@ test("WASM-backed extension completes one Pi Open sampling transaction", async (
   const before = await pi.emit("context", { type: "context", messages: [] }, ctx.context);
   assert.deepEqual(before.messages, [user("[U1]\nrequest")]);
 
-  await pi.emit(
-    "before_provider_request",
-    { type: "before_provider_request", payload: { model: "test", input: ["request"] } },
-    ctx.context,
-  );
   const callMessage = assistant([
     { type: "toolCall", id: "open-1", name: "spine_open", arguments: { goal: "inspect" } },
   ]);
@@ -1263,11 +1299,7 @@ test("WASM-backed extension blocks spawn mixed with open without aborting the se
 
   await pi.emit("session_start", { type: "session_start", reason: "new" }, ctx.context);
   await pi.emit("message_end", { type: "message_end", message: user("request") }, ctx.context);
-  await pi.emit(
-    "before_provider_request",
-    { type: "before_provider_request", payload: { model: "test", input: ["request"] } },
-    ctx.context,
-  );
+  await pi.emit("context", { type: "context", messages: [] }, ctx.context);
   const spawnInput = {
     tasks: [
       { summary: "child", prompt: "do child work" },
@@ -1619,6 +1651,7 @@ test("Pi context applies null and non-null context edits by entry id", async () 
   });
   const original = await pi.emit("context", { type: "context", messages: [] }, ctx.context);
   assert.deepEqual(original.messages, [{ ...kept, content: "[U1]\nkeep-user" }, { ...omitted, content: "[U2]\nOMITTED" }]);
+  await cancelTurn(pi, ctx);
   const commitsBeforeEdits = structuredClone(pi.entries);
   entries.push({
     type: "context_edit",
@@ -1643,7 +1676,10 @@ test("Pi context applies null and non-null context edits by entry id", async () 
   assert.equal(text.includes("keep-user"), false);
   assert.equal(text.includes("rewritten-user"), true);
   assert.deepEqual(context.messages, [{ ...kept, content: "[U1]\nrewritten-user" }]);
-  assert.deepEqual(pi.entries, commitsBeforeEdits, "host edits do not create commits");
+  // The second request only starts its sampling; the edits themselves record nothing.
+  assert.deepEqual(pi.entries.slice(0, commitsBeforeEdits.length), commitsBeforeEdits);
+  assert.deepEqual(pi.entries.slice(commitsBeforeEdits.length).map(entry => entry.data.record.type),
+    ["sampling_started"], "host edits do not create commits");
   assert.equal(ctx.aborts, 0);
 });
 
@@ -2014,11 +2050,7 @@ test("Pi compact commit failure still faults the live session", async () => {
   ctx.context.sessionManager.getBranch = () => [entry];
   createPiExtension()(pi.api);
   await pi.emit("session_start", { type: "session_start", reason: "new" }, ctx.context);
-  await pi.emit(
-    "before_provider_request",
-    { type: "before_provider_request", payload: { model: "test", input: ["keep"] } },
-    ctx.context,
-  );
+  await pi.emit("context", { type: "context", messages: [] }, ctx.context);
   const result = await pi.emit(
     "session_before_compact",
     {
@@ -2054,11 +2086,7 @@ test("user abort after Spine tool register drains leftover execution without lat
   const ctx = extensionContext();
   createPiExtension()(pi.api);
   await pi.emit("session_start", { type: "session_start", reason: "new" }, ctx.context);
-  await pi.emit(
-    "before_provider_request",
-    { type: "before_provider_request", payload: { model: "test", input: ["inspect"] } },
-    ctx.context,
-  );
+  await pi.emit("context", { type: "context", messages: [] }, ctx.context);
   await pi.emit(
     "tool_call",
     {
@@ -2219,6 +2247,7 @@ test("Pi compact rematerializes an edited cached view and admits silent durable 
   createPiExtension()(pi.api);
   await pi.emit("session_start", { type: "session_start", reason: "new" }, ctx.context);
   assert.deepEqual((await pi.emit("context", { type: "context", messages: [] }, ctx.context)).messages, [{ ...original, content: "[U1]\noriginal evidence" }]);
+  await cancelTurn(pi, ctx);
   branch.push({ type: "context_edit", id: "edit", parentId: "user", timestamp: "2", targetId: "user", replacement: { content: [{ type: "text", text: "revised evidence" }] } });
   branch.push({ type: "custom_message", id: "silent", parentId: "edit", timestamp: "2026-01-01T00:00:00Z", customType: "test.silent", content: "durable tail", display: false });
   let requested;
@@ -2290,6 +2319,7 @@ test("Pi request materialization failure aborts instead of returning the last pu
   await pi.emit("session_start", { type: "session_start", reason: "new" }, ctx.context);
   const cached = await pi.emit("context", { type: "context", messages: [] }, ctx.context);
   assert.deepEqual(cached.messages, [user("[U1]\nevidence before failure")]);
+  await cancelTurn(pi, ctx);
   const entriesBefore = structuredClone(pi.entries);
   runtime.nodePrompt = () => { throw new Error("materialization unavailable"); };
   const failed = await pi.emit("context", { type: "context", messages: cached.messages }, ctx.context);

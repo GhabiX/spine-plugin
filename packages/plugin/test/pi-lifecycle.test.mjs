@@ -57,7 +57,7 @@ test("Pi lifecycle admits source, persists sampling start, and commits one turn"
   const user = { role: "user", content: "request", timestamp: 1 };
   await lifecycle.observeMessage(user);
   await lifecycle.previewContext();
-  await lifecycle.beginSampling({ model: "test", input: ["request"] });
+  await lifecycle.beginSampling();
   await lifecycle.finishTurn({
     aborted: false,
     message: {
@@ -85,7 +85,7 @@ test("Pi lifecycle skips a clean preview and republishes after a source mutation
   await lifecycle.previewContext();
   assert.equal(log.filter(([kind]) => kind === "preview").length, 2);
 
-  await lifecycle.beginSampling({ input: [] });
+  await lifecycle.beginSampling();
   await lifecycle.finishTurn({
     aborted: false,
     message: { role: "assistant", content: [], stopReason: "stop", timestamp: 3 },
@@ -102,7 +102,7 @@ test("Pi lifecycle trusts the projection published during recovery", async () =>
 
 test("Pi lifecycle decodes tree input before recording execution admission", async () => {
   const { log, lifecycle } = harness();
-  await lifecycle.beginSampling({ input: [] });
+  await lifecycle.beginSampling();
   await assert.rejects(
     lifecycle.registerToolCall("invalid", "spine_open", { goal: "x".repeat(4097) }),
     PiSamplingLifecycleError,
@@ -114,7 +114,7 @@ test("Pi lifecycle decodes tree input before recording execution admission", asy
 
 test("Pi lifecycle rejects invalid Spawn input before recording execution admission", async () => {
   const { log, lifecycle } = harness();
-  await lifecycle.beginSampling({ input: [] });
+  await lifecycle.beginSampling();
   await assert.rejects(
     lifecycle.registerToolCall("invalid-spawn", "spine_spawn", {
       tasks: Array.from({ length: 17 }, (_, index) => ({ summary: `s${index}`, prompt: `p${index}` })),
@@ -145,7 +145,7 @@ test("Pi compact barrier rejects unsafe source and replacement boundaries", () =
 
 test("Pi lifecycle maps validated transition tools and finishes typed executions", async () => {
   const { log, lifecycle } = harness();
-  await lifecycle.beginSampling({ input: [] });
+  await lifecycle.beginSampling();
   assert.equal(await lifecycle.registerToolCall("call-1", "read", {}), false);
   assert.equal(
     await lifecycle.registerToolCall("call-2", "spine_next", {
@@ -179,7 +179,7 @@ test("Pi lifecycle stages Spawn only after terminal results and abort wins termi
     { ordinal: 0, outcome: "completed", memory_body: "child memory a" },
     { ordinal: 1, outcome: "completed", memory_body: "child memory b" },
   ];
-  await lifecycle.beginSampling({ input: [] });
+  await lifecycle.beginSampling();
   await lifecycle.registerToolCall("spawn-1", "spine_spawn", { tasks });
   assert.equal(log.some(([kind]) => kind === "stage"), false);
   await lifecycle.stageSpawn("spawn-1", tasks, results);
@@ -199,7 +199,7 @@ test("Pi lifecycle treats idle and repeated finishTurn as identity", async () =>
   };
   assert.equal(await lifecycle.finishTurn(cancelled), null);
   assert.equal(lifecycle.fault, null);
-  await lifecycle.beginSampling({ input: [] });
+  await lifecycle.beginSampling();
   await lifecycle.finishTurn(cancelled);
   assert.deepEqual(log.at(-1), ["finish-sampling", "cancelled", undefined]);
   assert.equal(await lifecycle.finishTurn(cancelled), null);
@@ -212,7 +212,7 @@ test("Pi lifecycle treats idle and repeated finishTurn as identity", async () =>
   );
   assert.equal(lifecycle.fault, null);
   assert.equal(log.filter(([kind]) => kind === "finish-sampling").length, 1);
-  await lifecycle.beginSampling({ input: ["followup"] });
+  await lifecycle.beginSampling();
   await lifecycle.finishTurn({
     aborted: false,
     message: { role: "assistant", content: [], stopReason: "stop", timestamp: 4 },
@@ -227,7 +227,7 @@ test("Pi lifecycle blocks spawn mixed with tree tools without latching a fault",
     { summary: "a", prompt: "pa" },
     { summary: "b", prompt: "pb" },
   ];
-  await lifecycle.beginSampling({ input: [] });
+  await lifecycle.beginSampling();
   assert.equal(await lifecycle.registerToolCall("open-1", "spine_open", { goal: "inspect" }), true);
   await assert.rejects(
     lifecycle.registerToolCall("spawn-1", "spine_spawn", { tasks }),
@@ -243,7 +243,7 @@ test("Pi lifecycle blocks spawn mixed with tree tools without latching a fault",
   });
   assert.equal(lifecycle.fault, null);
 
-  await lifecycle.beginSampling({ input: ["followup"] });
+  await lifecycle.beginSampling();
   assert.equal(await lifecycle.registerToolCall("spawn-2", "spine_spawn", { tasks }), true);
   await assert.rejects(
     lifecycle.registerToolCall("close-1", "spine_close", { memory: "done" }),
@@ -261,7 +261,7 @@ test("Pi lifecycle blocks spawn mixed with tree tools without latching a fault",
 
 test("Pi lifecycle faults closed on an unfinished transition", async () => {
   const { lifecycle } = harness();
-  await lifecycle.beginSampling({ input: [] });
+  await lifecycle.beginSampling();
   await lifecycle.registerToolCall("call", "spine_open", { goal: "scope" });
   await assert.rejects(
     lifecycle.finishTurn({
@@ -275,7 +275,7 @@ test("Pi lifecycle faults closed on an unfinished transition", async () => {
 
 test("Pi lifecycle drains unfinished executions on cancelled finishTurn", async () => {
   const { log, lifecycle } = harness();
-  await lifecycle.beginSampling({ input: [] });
+  await lifecycle.beginSampling();
   await lifecycle.registerToolCall("call", "spine_open", { goal: "scope" });
   await lifecycle.finishTurn({
     aborted: true,
@@ -284,7 +284,7 @@ test("Pi lifecycle drains unfinished executions on cancelled finishTurn", async 
   assert.equal(lifecycle.fault, null);
   assert.deepEqual(log.at(-2), ["finish-execution", "call", false]);
   assert.deepEqual(log.at(-1), ["finish-sampling", "cancelled", undefined]);
-  await lifecycle.beginSampling({ input: ["followup"] });
+  await lifecycle.beginSampling();
   await lifecycle.finishTurn({
     aborted: false,
     message: { role: "assistant", content: [], stopReason: "stop", timestamp: 3 },
@@ -295,7 +295,7 @@ test("Pi lifecycle drains unfinished executions on cancelled finishTurn", async 
 
 test("Pi lifecycle rejects deferred assistant responses instead of inventing completion", async () => {
   const { lifecycle } = harness();
-  await lifecycle.beginSampling({ input: [] });
+  await lifecycle.beginSampling();
   await assert.rejects(
     lifecycle.finishTurn({
       aborted: false,

@@ -135,6 +135,16 @@ rewriting the prefix when a node opens or closes. The local cachetree GPT
 profiles now declare this capability. This setting must reflect provider
 support; it is not enabled for models with unverified capabilities.
 
+## Sampling boundary
+
+One Spine sampling is one Pi agent-loop model request. It begins in the
+`context` hook, after the request context is published and materialized, and
+ends at `turn_end`, which Pi emits on every path, including run failures.
+`before_provider_request` is not a sampling boundary: Pi's cache warmer replays
+the last request with `maxTokens: 1` through that hook without a turn, while a
+tool call runs (`cacheWarming: "streaming"`) or after the run settles
+(`"idle"`). Spine leaves those replays alone.
+
 ## Durable message order
 
 Pi 0.87.1 can persist context-only custom messages after a turn without calling

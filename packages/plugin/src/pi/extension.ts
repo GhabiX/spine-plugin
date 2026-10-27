@@ -573,6 +573,12 @@ function registerLifecycleHandlers(
       await session.lifecycle.previewContext();
       assertCurrentSession(slot, session);
       const messages = session.materializeMessages(ctx.sessionManager.getBranch());
+      // Pi calls the context hook exactly once per agent-loop model request, and every
+      // such request ends in turn_end, so the hook opens the sampling. Provider
+      // requests are not samplings: Pi's cache warmer replays the last one through
+      // before_provider_request without a turn.
+      slot.samplingPrefix = structuredClone(ctx.sessionManager.getBranch());
+      await session.lifecycle.beginSampling();
       renderSpineTree(ctx, slot, session);
       return {
         messages: structuredClone(messages) as unknown as ContextEvent["messages"],
@@ -587,13 +593,6 @@ function registerLifecycleHandlers(
   pi.on("context_with_system", async (event) => {
     if (slot.mode !== "sdk") return;
     return { messages: projectPiSpineMessages(event.messages as unknown as PiAgentMessage[]) as unknown as ContextEvent["messages"] };
-  });
-  pi.on("before_provider_request", async (event, ctx) => {
-    if (slot.mode !== "sdk") return;
-    await guardHook(pi, slot, ctx, { hook: "before_provider_request", stage: "begin_sampling" }, async () => {
-      slot.samplingPrefix = structuredClone(ctx.sessionManager.getBranch());
-      await (await requireSession(slot)).lifecycle.beginSampling(event.payload);
-    });
   });
   pi.on("before_agent_start", async (event, ctx) => {
     if (slot.mode !== "sdk") return;

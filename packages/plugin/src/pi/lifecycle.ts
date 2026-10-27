@@ -185,10 +185,10 @@ export class PiSamplingLifecycle {
     });
   }
 
-  async beginSampling(_providerPayload: unknown): Promise<void> {
+  async beginSampling(): Promise<void> {
     await this.#guard(async () => {
       if (this.#samplingActive) {
-        throw new PiSamplingLifecycleError("Pi started a provider request before the prior turn ended");
+        throw new PiSamplingLifecycleError("Pi started a model request before the prior turn ended");
       }
       await this.#adapter.beginSampling();
       this.#samplingActive = true;
