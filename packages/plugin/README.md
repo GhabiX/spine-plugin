@@ -10,6 +10,24 @@ pi install npm:@spinejit/pi-spinejit
 Version `0.1.0` is developed and tested against Pi `1.1.0`. The last state developed
 against Pi 0.87.1 is tagged `pi-0.87-final`.
 
+## Recommended Pi plugins
+
+We also publish these Pi plugins, which work alongside this one:
+
+| Package | Source | Description |
+| --- | --- | --- |
+| [`@spinejit/pi-background-job`](https://www.npmjs.com/package/@spinejit/pi-background-job) | [`GhabiX/pi-background-job`](https://github.com/GhabiX/pi-background-job) | Background jobs and output monitors for Pi: exits and new log lines wake the agent by themselves. |
+| [`@spinejit/pi-btw-cached`](https://www.npmjs.com/package/@spinejit/pi-btw-cached) | [`GhabiX/pi-btw-cached`](https://github.com/GhabiX/pi-btw-cached) | /btw side questions for Pi: ask about the main session while it runs, on the same prompt-cache prefix; runs no tools, saves nothing to history. |
+| [`@spinejit/pi-compact-tree`](https://www.npmjs.com/package/@spinejit/pi-compact-tree) | [`GhabiX/pi-compact-tree`](https://github.com/GhabiX/pi-compact-tree) | Compact process tree for Pi's terminal UI: tool calls fold into one-line summaries and thinking into titles, with a borderless input and a one-line footer. |
+| [`@spinejit/pi-timeout-policy`](https://www.npmjs.com/package/@spinejit/pi-timeout-policy) | [`GhabiX/pi-timeout-policy`](https://github.com/GhabiX/pi-timeout-policy) | One timeout policy for Pi's foreground tools: 60s when unset, 2h at most, and timeouts for grep and find too. |
+
+```bash
+pi install npm:@spinejit/pi-background-job
+pi install npm:@spinejit/pi-btw-cached
+pi install npm:@spinejit/pi-compact-tree
+pi install npm:@spinejit/pi-timeout-policy
+```
+
 ## Migrating from @spinejit/spine-plugin
 
 The public package is now `@spinejit/pi-spinejit`. Stop the current session,
