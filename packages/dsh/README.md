@@ -72,6 +72,10 @@ loads it as the Cordis plugin `spinejit`.
 - Plugins that rewrite conversation context (compaction, tool-result pruning,
   image offload) must not be loaded with this one. Spine owns the context; a
   rewritten source makes the plugin refuse the next request.
+- A reply kept at Close/Next keeps its reasoning here; Pi and Codex show it by
+  its text alone. DSH 0.2.1 gives a plugin no supported way to change how a
+  logged message is shown to the model: message projections are a fixed set
+  inside DSH, and model requests are read-only to listeners.
 
 ## Tests
 

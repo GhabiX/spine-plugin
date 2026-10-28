@@ -157,7 +157,8 @@ test("Pi shows a kept reply as its text blocks only", () => {
     role: "assistant",
     content: [
       { type: "thinking", thinking: "private", thinkingSignature: "sig" },
-      { type: "text", text: "first part" },
+      { type: "text", text: "first part", textSignature: "text-sig" },
+      { type: "thinking", thinking: "", thinkingSignature: "opaque", redacted: true },
       { type: "text", text: "second part" },
     ],
     stopReason: "stop",
@@ -179,9 +180,9 @@ test("Pi shows a kept reply as its text blocks only", () => {
 
   assert.deepEqual(messages, [{
     ...reply,
-    content: [{ type: "text", text: "first part" }, { type: "text", text: "second part" }],
+    content: [{ type: "text", text: "first part", textSignature: "text-sig" }, { type: "text", text: "second part" }],
   }]);
-  assert.equal(reply.content.length, 3);
+  assert.equal(reply.content.length, 4);
 });
 
 test("Pi materialization applies an entry projection without matching message text", () => {
