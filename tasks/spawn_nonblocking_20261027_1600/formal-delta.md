@@ -100,8 +100,10 @@ $$
 $$
 
 $$
-\operatorname{reply}(m)\iff \kappa(m)=\mathsf{assistant}\land \mathit{stop}(m)=\mathsf{stop}\land m\text{ 不含工具调用}\land m\text{ 有非空文本块}
+\operatorname{reply}(m)\iff \kappa(m)=\mathsf{assistant}\land \mathit{stop}(m)=\mathsf{stop}\land m\text{ 不含工具调用}\land m\text{ 有非空文本块}\land \operatorname{unarrived}(\beta(m))=\varnothing
 $$
+
+$\operatorname{unarrived}(\beta(m))$ 是 $m$ 所在采样开始时，本命名空间里还没到达的出生（不含继承的）。还有出生没到达时，turn 不结束（D1），这时的回复只是在报告等待，不保留（2026-10-28 定）。
 
 保留的是投影 $\operatorname{keep}(m)$：user、arrival 原样；reply 只取文本块（不含思考内容和签名）。
 
@@ -152,7 +154,7 @@ $$
 4. 终态已持久化、arrival 接纳前崩溃：恢复后不重跑、不重复。
 5. 多层 Close 后出生与 arrival 都保留，每条 occurrence 只投影一次。
 6. Close 时有未接纳的出生：拒绝并列出；arrival 被接纳后 Close 成功。
-7. reply 保留：stop 且无工具调用的 assistant 文本跨 Close/Next 保留；带工具调用的过程文字、length 截断、思考内容不保留。
+7. reply 保留：stop 且无工具调用的 assistant 文本跨 Close/Next 保留；带工具调用的过程文字、length 截断、思考内容、还有出生没到达时的回复不保留。
 
 ## v1 → v2 改动
 

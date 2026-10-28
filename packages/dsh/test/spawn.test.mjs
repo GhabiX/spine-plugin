@@ -57,10 +57,11 @@ test("children start from the log before the Spawn; each arrival wakes the paren
     ];
     assert.deepEqual(parent[3], [...parent[1], ...births, "assistant: waiting", arrival("1.1.1", "completed", "x is 42")]);
     assert.deepEqual(parent[4], [...parent[3], "assistant: got x", arrival("1.1.2", "completed", "y is 7")]);
-    // Close keeps the births, replies and arrivals, as it keeps child memories.
+    // Close keeps the births and arrivals, as it keeps child memories; the
+    // replies given while a birth was unarrived only reported waiting.
     assert.deepEqual(parent[5], [
-      "user: [U1]\nstart", "context: …", ...births.slice(2), "assistant: waiting", arrival("1.1.1", "completed", "x is 42"),
-      "assistant: got x", arrival("1.1.2", "completed", "y is 7"),
+      "user: [U1]\nstart", "context: …", ...births.slice(2), arrival("1.1.1", "completed", "x is 42"),
+      arrival("1.1.2", "completed", "y is 7"),
       memory("1.1", "m"), call("spine_close", { memory: "m" }), staged("spine_close"),
     ]);
     assert.deepEqual(ends(dsh, "session-1"), ["completed", "completed", "completed"]);
