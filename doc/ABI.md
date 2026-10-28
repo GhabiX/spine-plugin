@@ -77,6 +77,11 @@ assistant text and is kept, with user messages and arrivals, in the memory of
 the node that closes over it. A reply in the same sampling as a structural
 operation is rejected.
 
+A closed node renders as its memory summary first, then what it keeps in their
+original order: user messages, replies, births, arrivals and its children's
+memories, each child rendered by the same rule. A kept reply thus follows the
+account of the work behind it.
+
 v3 removes v2's `terminal_results`, `SpawnResult` and `SpawnEvidence`; a v2
 client is rejected by the schema check.
 

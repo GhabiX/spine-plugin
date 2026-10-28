@@ -60,9 +60,8 @@ test("children start from the log before the Spawn; each arrival wakes the paren
     // Close keeps the births and arrivals, as it keeps child memories; the
     // replies given while a birth was unarrived only reported waiting.
     assert.deepEqual(parent[5], [
-      "user: [U1]\nstart", "context: …", ...births.slice(2), arrival("1.1.1", "completed", "x is 42"),
-      arrival("1.1.2", "completed", "y is 7"),
-      memory("1.1", "m"), call("spine_close", { memory: "m" }), staged("spine_close"),
+      "user: [U1]\nstart", "context: …", memory("1.1", "m"), ...births.slice(2), arrival("1.1.1", "completed", "x is 42"),
+      arrival("1.1.2", "completed", "y is 7"), call("spine_close", { memory: "m" }), staged("spine_close"),
     ]);
     assert.deepEqual(ends(dsh, "session-1"), ["completed", "completed", "completed"]);
 
@@ -112,7 +111,9 @@ test("Close and a child's return wait for their children; a child that ends with
     assert.match(tooEarly.content[0].text, /Spawned children 1\.1\.1 \(X1\), 1\.1\.2 \(X2\) have not arrived/);
 
     const last = requestsOf(dsh, "session-1").at(-1);
-    assert.deepEqual(last.slice(-3), [memory("1.1", "m"), call("spine_close", { memory: "m" }), staged("spine_close")]);
+    assert.deepEqual(last.slice(-2), [call("spine_close", { memory: "m" }), staged("spine_close")]);
+    const kept = last.findIndex((line) => line.startsWith("user: <spine_arrival"));
+    assert.ok(kept > last.indexOf(memory("1.1", "m")) && last.includes(memory("1.1", "m")), "the memory leads what the node keeps");
     assert.deepEqual(last.filter((line) => line.startsWith("user: <spine_arrival")).toSorted(), [
       arrival("1.1.1", "completed", "x after X1 and X2"),
       arrival("1.1.2", "errored", "the child went idle without calling spine_child_return"),
@@ -236,7 +237,9 @@ test("a headless run ends only after the parent has taken its children's arrival
   try {
     const agent = await dsh.runHeadless("start");
     const last = requestsOf(dsh, "session-1").at(-1);
-    assert.deepEqual(last.slice(-3), [memory("1.1", "m"), call("spine_close", { memory: "m" }), staged("spine_close")]);
+    assert.deepEqual(last.slice(-2), [call("spine_close", { memory: "m" }), staged("spine_close")]);
+    const kept = last.findIndex((line) => line.startsWith("user: <spine_arrival"));
+    assert.ok(kept > last.indexOf(memory("1.1", "m")) && last.includes(memory("1.1", "m")), "the memory leads what the node keeps");
     assert.deepEqual(last.filter((line) => line.startsWith("user: <spine_arrival")).toSorted(), [
       arrival("1.1.1", "completed", "x is 42"),
       arrival("1.1.2", "completed", "y is 7"),

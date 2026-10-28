@@ -98,7 +98,7 @@ test('parent own memory excludes descendant summaries; full memory preserves slo
     const data = f.data();
     assert.deepEqual(data.memorySections('1.1'), ['parent conclusion']);
     assert.equal(data.memoryText('1.1'), 'parent conclusion');
-    assert.match(data.memoryText('1.1', true), /child conclusion[\s\S]*parent conclusion/);
+    assert.match(data.memoryText('1.1', true), /parent conclusion[\s\S]*child conclusion/);
   } finally { f.runtime.dispose(); }
 });
 

@@ -150,7 +150,10 @@ Spine items stay at their projected positions in the conversation. Node
 descriptors, memory, births and arrivals are Pi custom messages, which Pi sends
 to every provider as user messages in place; kept replies are assistant
 messages. None of them is a system message, so no provider moves them into the
-initial system content, and opening a node only appends to the request.
+initial system content, and opening a node only appends to the request. A
+closed node shows its memory first, then the user messages, replies and
+arrivals it keeps, so a kept reply never reads as an answer given without the
+work behind it.
 
 ## Sampling boundary
 

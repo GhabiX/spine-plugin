@@ -965,7 +965,8 @@ test("Spawn returns at once; children start after the commit and each arrives on
   assert.equal(once(/^interim answer for the user$/), 1);
   assert.equal(once(/narration inside the node/), 0);
   assert.equal(once(/<spine_memory node_id="1\.1">\nnode memory/), 1);
-  const order = ["<spine_spawn node_id=\"1.1.1\"", "<spine_arrival node_id=\"1.1.1\"", "interim answer", "<spine_memory node_id=\"1.1\""]
+  // The closed node's memory leads what it keeps.
+  const order = ["<spine_memory node_id=\"1.1\"", "<spine_spawn node_id=\"1.1.1\"", "<spine_arrival node_id=\"1.1.1\"", "interim answer"]
     .map((marker) => after.findIndex((text) => text.includes(marker)));
   assert.deepEqual([...order].sort((a, b) => a - b), order);
 });

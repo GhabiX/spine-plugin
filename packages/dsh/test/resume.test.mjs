@@ -38,7 +38,7 @@ test("a resumed session keeps its open node, user numbering and Close", async ()
   assert.deepEqual(run.ends, ["completed", "completed"]);
   assert.deepEqual(run.requests, [
     ["user: [U1]\nstart", "context: …", node("1.1", "A"), call("spine_open", { goal: "A" }), staged("spine_open"), "assistant: replyA", "user: [U2]\nmore"],
-    ["user: [U1]\nstart", "context: …", "assistant: replyA", "user: [U2]\nmore", memory("1.1", "memA"), call("spine_close", { memory: "memA" }), staged("spine_close")],
+    ["user: [U1]\nstart", "context: …", memory("1.1", "memA"), "assistant: replyA", "user: [U2]\nmore", call("spine_close", { memory: "memA" }), staged("spine_close")],
   ]);
 });
 
@@ -157,7 +157,7 @@ test("a stream that ends without a finish chunk stopped by itself: its reply sur
   ]);
   assert.deepEqual(restarted, continuous);
   assert.deepEqual(continuous.requests.at(-1), [
-    "user: [U1]\nstart", "context: …", "assistant: replyA", "user: [U2]\nmore", memory("1.1", "mA"), call("spine_close", { memory: "mA" }), staged("spine_close"),
+    "user: [U1]\nstart", "context: …", memory("1.1", "mA"), "assistant: replyA", "user: [U2]\nmore", call("spine_close", { memory: "mA" }), staged("spine_close"),
   ]);
 });
 

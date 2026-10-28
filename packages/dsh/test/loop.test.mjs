@@ -61,8 +61,8 @@ test("Next, nesting and a second user turn: Close keeps user messages, replies a
     "user: [U2]\nmore", node("1.2.1", "C"), call("spine_open", { goal: "C" }), staged("spine_open"),
   ]);
   assert.deepEqual(run.requests[6], [
-    "user: [U1]\nstart", "context: …", memory("1.1", "memA"), "assistant: reply1", "user: [U2]\nmore",
-    memory("1.2.1", "memC"), memory("1.2", "memB"), call("spine_close", { memory: "memB" }), staged("spine_close"),
+    "user: [U1]\nstart", "context: …", memory("1.1", "memA"), memory("1.2", "memB"), "assistant: reply1", "user: [U2]\nmore",
+    memory("1.2.1", "memC"), call("spine_close", { memory: "memB" }), staged("spine_close"),
   ]);
 });
 
@@ -126,7 +126,7 @@ test("text cut off at max tokens is no reply: Close folds it into the node", asy
   );
   assert.deepEqual(run.ends, ["max-tokens", "completed"]);
   assert.deepEqual(run.requests[3], [
-    "user: [U1]\nstart", "context: …", "user: [U2]\nmore", memory("1.1", "m"), call("spine_close", { memory: "m" }), staged("spine_close"),
+    "user: [U1]\nstart", "context: …", memory("1.1", "m"), "user: [U2]\nmore", call("spine_close", { memory: "m" }), staged("spine_close"),
   ]);
 });
 
