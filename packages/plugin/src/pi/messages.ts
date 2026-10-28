@@ -350,22 +350,6 @@ function materializeProjection(
   throw unsupportedProjection(item);
 }
 
-/** Convert only Spine node descriptors to Pi system messages for a request. */
-export function projectPiSpineMessages(messages: readonly PiAgentMessage[]): PiAgentMessage[] {
-  return messages.map((message) => {
-    if (!isPiSpineProjection(message, PI_SPINE_NODE_MESSAGE_TYPE)) {
-      return structuredClone(message);
-    }
-    return {
-      role: "system",
-      content: typeof message.content === "string"
-        ? message.content
-        : message.content.filter((part): part is PiTextContent => part.type === "text"),
-      timestamp: message.timestamp,
-    };
-  });
-}
-
 export function isPiSpineProjection(
   message: PiAgentMessage,
   customType?: string,

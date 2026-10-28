@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { convertToLlm } from "@earendil-works/pi-coding-agent";
 import {
   isPiHostSystemMessage,
   materializePiContext,
@@ -8,7 +9,6 @@ import {
   PI_SPINE_NODE_MESSAGE_TYPE,
   PI_SPINE_BIRTH_MESSAGE_TYPE,
   arrivalMessage,
-  projectPiSpineMessages,
   PiContextMaterializationError,
   PiSourceBindings,
   sourceObservation,
@@ -151,17 +151,10 @@ test("Pi renders only the canonical Spine-owned projection forms", () => {
   assert.equal(messages[3].role, "assistant");
   assert.deepEqual(messages[3].content, [{ type: "text", text: "here is the answer" }]);
 
-  const providerMessages = projectPiSpineMessages(messages);
-  assert.equal(providerMessages[0].role, "system");
-  assert.equal(providerMessages[0].content, messages[0].content);
-  assert.equal(providerMessages[1].role, "custom");
-  assert.equal(providerMessages[1].customType, PI_SPINE_MEMORY_MESSAGE_TYPE);
-  assert.equal(providerMessages[2].role, "custom");
-  assert.equal(providerMessages[2].customType, PI_SPINE_BIRTH_MESSAGE_TYPE);
-
-  const reprojected = projectPiSpineMessages(providerMessages);
-  assert.deepEqual(reprojected.map((message) => message.role), ["system", "custom", "custom", "assistant"]);
-  assert.equal(reprojected[0].content, providerMessages[0].content);
+  // Every provider receives each Spine item where it was projected.
+  const provider = convertToLlm(messages);
+  assert.deepEqual(provider.map((message) => message.role), ["user", "user", "user", "assistant"]);
+  assert.equal(provider[0].content[0].text, messages[0].content);
 });
 
 test("Pi materialization applies an entry projection without matching message text", () => {

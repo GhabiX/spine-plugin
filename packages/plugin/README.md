@@ -146,13 +146,11 @@ No release or publication is implied by this local development build.
 
 ## Provider message ordering
 
-Spine node descriptors must stay at their projected positions in the conversation.
-For an OpenAI Responses model that supports developer messages within the
-conversation, set model compatibility `supportsMidConvoSystemMessages: true`.
-Pi 0.87.1 otherwise hoists those messages into the initial system content,
-rewriting the prefix when a node opens or closes. The local cachetree GPT
-profiles now declare this capability. This setting must reflect provider
-support; it is not enabled for models with unverified capabilities.
+Spine items stay at their projected positions in the conversation. Node
+descriptors, memory, births and arrivals are Pi custom messages, which Pi sends
+to every provider as user messages in place; kept replies are assistant
+messages. None of them is a system message, so no provider moves them into the
+initial system content, and opening a node only appends to the request.
 
 ## Sampling boundary
 

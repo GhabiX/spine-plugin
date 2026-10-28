@@ -402,58 +402,11 @@ test("before_agent_start composes the configured prompt and registers its tool c
   }
 });
 
-test("context_with_system preserves host messages and restores Spine node roles per request", async () => {
+test("Spine leaves the provider transcript to Pi", async () => {
   const pi = mockPi();
   createPiExtension()(pi.api);
   await pi.emit("session_start", { type: "session_start", reason: "new" }, extensionContext().context);
-  const messages = [
-    { role: "system", content: "Pi host instructions", timestamp: 1 },
-    {
-      role: "custom",
-      customType: "spine.node",
-      content: '<spine_node id="0" status="opened">node instructions</spine_node>',
-      display: false,
-      timestamp: 2,
-      details: {
-        schema: "spine.pi.projection/v1",
-        kind: "node",
-        nodeId: "0",
-        renderer: "xml",
-      },
-    },
-    {
-      role: "custom",
-      customType: "spine.memory",
-      content: "<spine_memory>returned context</spine_memory>",
-      display: false,
-      timestamp: 3,
-      details: {
-        schema: "spine.pi.projection/v1",
-        kind: "memory",
-        nodeId: "0",
-        renderer: "xml",
-      },
-    },
-    { role: "user", content: "continue", timestamp: 4 },
-  ];
-
-  const projected = await pi.emit(
-    "context_with_system",
-    { messages },
-    extensionContext().context,
-  );
-
-  assert.deepEqual(projected.messages.map((message) => message.role), [
-    "system",
-    "system",
-    "custom",
-    "user",
-  ]);
-  assert.equal(projected.messages[0].content, "Pi host instructions");
-  assert.equal(projected.messages[1].content, messages[1].content);
-  assert.equal(projected.messages[2].customType, "spine.memory");
-  assert.equal(projected.messages[3].content, "continue");
-  assert.equal(messages[1].role, "custom");
+  assert.equal(await pi.emit("context_with_system", { messages: [] }, extensionContext().context), undefined);
 });
 
 test("child mode keeps ordinary tools, Spine tree tools, nested spawn, and typed return", async () => {

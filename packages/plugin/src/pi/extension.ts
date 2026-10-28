@@ -66,7 +66,6 @@ import {
   arrivalOf,
   isPiHostSystemMessage,
   materializePiContext,
-  projectPiSpineMessages,
   type PiAgentMessage,
   type PiSourceBindings,
 } from "./messages.js";
@@ -546,10 +545,6 @@ function registerLifecycleHandlers(
       return { messages: [] };
     }
   });
-  pi.on("context_with_system", async (event) => {
-    if (slot.mode !== "sdk") return;
-    return { messages: projectPiSpineMessages(event.messages as unknown as PiAgentMessage[]) as unknown as ContextEvent["messages"] };
-  });
   pi.on("agent_settled", async (event, ctx) => {
     if (slot.mode !== "sdk" || slot.current === null) return;
     const { children, latestContext } = slot.current;
@@ -775,9 +770,8 @@ async function summarizePiCompaction(
   await observePiBranchSources(session, ctx.sessionManager.getSessionId(), event.branchEntries);
   await session.lifecycle.previewContext();
   assertCurrentSession(slot, session);
-  const visible = projectPiSpineMessages(
-    session.materializeMessages(event.branchEntries).filter((message) => !isPiHostSystemMessage(message)),
-  );
+  const visible = session.materializeMessages(event.branchEntries)
+    .filter((message) => !isPiHostSystemMessage(message));
   const tools = currentPiToolDeclarations(event.branchEntries);
   const previous = event.preparation.previousSummary === undefined
     ? ""
