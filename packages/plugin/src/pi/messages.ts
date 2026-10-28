@@ -334,18 +334,6 @@ function materializeProjection(
         },
       );
     }
-    if ("Reply" in slot) {
-      return {
-        role: "assistant",
-        content: [{ type: "text", text: slot.Reply.message.content }],
-        api: "spine",
-        provider: "spine",
-        model: "spine",
-        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-        stopReason: "stop",
-        timestamp: 0,
-      };
-    }
   }
   throw unsupportedProjection(item);
 }

@@ -121,10 +121,6 @@ test("Pi renders only the canonical Spine-owned projection forms", () => {
           source: { start: 3, end: 3 },
           task: { summary: "task <a>", prompt: "prompt" },
         } } }, 2),
-        projection({ MemorySlot: { Reply: {
-          owner_node: [0, 2],
-          message: { boundary: 4, role: "Reply", content: "here is the answer" },
-        } } }, 3),
       ],
       plan_digest: "plan-1",
     },
@@ -148,12 +144,10 @@ test("Pi renders only the canonical Spine-owned projection forms", () => {
   assert.equal(messages[2].customType, PI_SPINE_BIRTH_MESSAGE_TYPE);
   assert.equal(messages[2].details.kind, "birth");
   assert.equal(messages[2].content, '<spine_spawn node_id="0.3" summary="task &lt;a&gt;">\nprompt\n</spine_spawn>');
-  assert.equal(messages[3].role, "assistant");
-  assert.deepEqual(messages[3].content, [{ type: "text", text: "here is the answer" }]);
 
   // Every provider receives each Spine item where it was projected.
   const provider = convertToLlm(messages);
-  assert.deepEqual(provider.map((message) => message.role), ["user", "user", "user", "assistant"]);
+  assert.deepEqual(provider.map((message) => message.role), ["user", "user", "user"]);
   assert.equal(provider[0].content[0].text, messages[0].content);
 });
 

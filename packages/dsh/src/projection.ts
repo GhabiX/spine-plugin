@@ -61,7 +61,6 @@ function planItem(
     const slot = item.MemorySlot;
     if ("Summary" in slot) return { type: "spine", text: spineMemoryText(slot.Summary.owner_node, slot.Summary.body) };
     if ("Birth" in slot) return { type: "spine", text: spineBirthText(slot.Birth.owner_node, slot.Birth.task) };
-    if ("Reply" in slot) return { type: "source", seq: slot.Reply.message.boundary as SessionSeq, anchor: null };
   }
   throw new SpineDshError(`DSH cannot show Spine plan item ${JSON.stringify(item).slice(0, 80)}`);
 }
