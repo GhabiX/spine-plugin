@@ -13,8 +13,8 @@
     "test": "npm run build && node --test test/*.test.mjs"
   },
   "dependencies": {
-    "@spinejit/pi-spinejit": "0.1.1",
-    "@spinejit/spine-sdk": "0.1.0"
+    "@spinejit/pi-spinejit": "0.1.2",
+    "@spinejit/spine-sdk": "0.1.1"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",

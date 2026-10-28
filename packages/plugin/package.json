@@ -1,6 +1,6 @@
 {
   "name": "@spinejit/pi-spinejit",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "type": "module",
   "license": "Apache-2.0",
   "author": "GhabiX",
@@ -58,7 +58,7 @@
   },
   "dependencies": {
     "@spinejit/spine-host": "0.1.0",
-    "@spinejit/spine-sdk": "0.1.0"
+    "@spinejit/spine-sdk": "0.1.1"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
