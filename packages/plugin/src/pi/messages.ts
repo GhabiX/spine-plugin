@@ -276,7 +276,7 @@ export function materializePiContext(
         message = bindings.resolve(cell.source_id);
       }
       for (const label of cell.labels) {
-        message = prependUserAnchor(message, label.UserAnchor);
+        message = label === "Reply" ? replyText(message) : prependUserAnchor(message, label.UserAnchor);
       }
       messages.push(message);
       continue;
@@ -354,6 +354,16 @@ function unsupportedProjection(item: ContextItem): PiContextMaterializationError
   return new PiContextMaterializationError(
     `Pi cannot materialize Spine projection item ${Object.keys(item)[0] ?? "unknown"}`,
   );
+}
+
+/** A kept reply shows only what the agent wrote to the user. */
+function replyText(message: PiAgentMessage): PiAgentMessage {
+  if (message.role !== "assistant") {
+    throw new PiContextMaterializationError(`Spine reply label targets a ${message.role} message`);
+  }
+  const copy = structuredClone(message);
+  copy.content = copy.content.filter((part) => part.type === "text");
+  return copy;
 }
 
 function prependUserAnchor(message: PiAgentMessage, anchor: number): PiAgentMessage {

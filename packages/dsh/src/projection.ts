@@ -48,7 +48,7 @@ function planItem(
   nodePrompt: string,
 ): PlanItem {
   if (cell.type === "source") {
-    const anchors = cell.labels.map((label) => label.UserAnchor);
+    const anchors = cell.labels.flatMap((label) => (label === "Reply" ? [] : [label.UserAnchor]));
     if (anchors.length > 1) throw new SpineDshError(`source ${seqOf(cell.source_id)} has ${anchors.length} user anchors`);
     return { type: "source", seq: seqOf(cell.source_id), anchor: anchors[0] ?? null };
   }

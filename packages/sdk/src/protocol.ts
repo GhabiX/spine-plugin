@@ -193,11 +193,14 @@ export type SamplingArchiveRecord =
   | { type: "sampling_started"; record: SamplingStarted }
   | { type: "sampling_commit"; record: SamplingCommit };
 
+/** `Reply`: the source stands as a kept reply; show only its text. */
+export type ContextLabel = { UserAnchor: SafeInteger } | "Reply";
+
 export type ContextPlanCell =
   | {
       type: "source";
       source_id: EpochOrdinalId;
-      labels: Array<{ UserAnchor: SafeInteger }>;
+      labels: ContextLabel[];
     }
   | {
       type: "projection";

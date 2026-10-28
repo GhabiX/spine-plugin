@@ -151,6 +151,39 @@ test("Pi renders only the canonical Spine-owned projection forms", () => {
   assert.equal(provider[0].content[0].text, messages[0].content);
 });
 
+test("Pi shows a kept reply as its text blocks only", () => {
+  const bindings = new PiSourceBindings();
+  const reply = {
+    role: "assistant",
+    content: [
+      { type: "thinking", thinking: "private", thinkingSignature: "sig" },
+      { type: "text", text: "first part" },
+      { type: "text", text: "second part" },
+    ],
+    stopReason: "stop",
+    timestamp: 7,
+  };
+  bindings.bind(SOURCE_ID, reply, "reply");
+  const messages = materializePiContext({
+    transactionId: "preview:plan",
+    contextPlan: {
+      schema: "spine.context.plan.v2",
+      thread: "pi-session",
+      epoch: 0,
+      source_snapshot_digest: "source",
+      cells: [{ type: "source", source_id: SOURCE_ID, labels: ["Reply"] }],
+      plan_digest: "plan",
+    },
+    projection: { nodes: [], cursor: [], visible_context: [], last_boundary: null },
+  }, bindings);
+
+  assert.deepEqual(messages, [{
+    ...reply,
+    content: [{ type: "text", text: "first part" }, { type: "text", text: "second part" }],
+  }]);
+  assert.equal(reply.content.length, 3);
+});
+
 test("Pi materialization applies an entry projection without matching message text", () => {
   const bindings = new PiSourceBindings();
   const kept = { role: "user", content: "keep", timestamp: 1 };
