@@ -59,7 +59,7 @@ test("children start from the log before the Spawn; each arrival wakes the paren
     assert.deepEqual(parent[4], [...parent[3], "assistant: got x", arrival("1.1.2", "completed", "y is 7")]);
     // Close keeps the births, replies and arrivals, as it keeps child memories.
     assert.deepEqual(parent[5], [
-      "user: [U1]\nstart", ...births.slice(2), "assistant: waiting", arrival("1.1.1", "completed", "x is 42"),
+      "user: [U1]\nstart", "context: …", ...births.slice(2), "assistant: waiting", arrival("1.1.1", "completed", "x is 42"),
       "assistant: got x", arrival("1.1.2", "completed", "y is 7"),
       memory("1.1", "m"), call("spine_close", { memory: "m" }), staged("spine_close"),
     ]);
@@ -67,8 +67,9 @@ test("children start from the log before the Spawn; each arrival wakes the paren
 
     for (const [id, summary, peer] of [[X, "X", "Y"], [Y, "Y", "X"]]) {
       const [first] = requestsOf(dsh, id);
-      assert.deepEqual(first.slice(0, -1), parent[1], "the child sees what the parent's Spawn sampling saw");
-      assert.match(first.at(-1), new RegExp(`^user: \\[U2\\]\\nYou are a spawned execution branch[^]*You are: ${summary}\\n[^]*- ${peer}\\n`));
+      assert.deepEqual(first.slice(0, -2), parent[1], "the child sees what the parent's Spawn sampling saw");
+      assert.equal(first.at(-1), "context: …");
+      assert.match(first.at(-2), new RegExp(`^user: \\[U2\\]\\nYou are a spawned execution branch[^]*You are: ${summary}\\n[^]*- ${peer}\\n`));
       assert.deepEqual(ends(dsh, id), ["completed"]);
       const restored = shown({ messages: await dsh.restored(id) });
       assert.deepEqual(restored.slice(0, first.length), first, "official JSONL restore of the child");
@@ -219,6 +220,48 @@ test("a child forked while earlier births are pending leaves them to its parent"
       arrival("1.1.3", "completed", "z"),
       arrival("1.1.4", "completed", "w"),
     ]);
+  } finally {
+    await dsh.dispose();
+  }
+});
+
+test("a headless run ends only after the parent has taken its children's arrivals", async () => {
+  const later = (reply) => () => new Promise((resolve) => setTimeout(() => resolve(reply), 50));
+  const dsh = await mountDsh({
+    "session-1": [[["spine_open", { goal: "A" }]], spawnXY, "waiting", ...afterArrivals(2, [["spine_close", { memory: "m" }]], "x is 42, y is 7")],
+    [X]: [later(returns("x is 42"))],
+    [Y]: [later(returns("y is 7"))],
+  });
+  try {
+    const agent = await dsh.runHeadless("start");
+    const last = requestsOf(dsh, "session-1").at(-1);
+    assert.deepEqual(last.slice(-3), [memory("1.1", "m"), call("spine_close", { memory: "m" }), staged("spine_close")]);
+    assert.deepEqual(last.filter((line) => line.startsWith("user: <spine_arrival")).toSorted(), [
+      arrival("1.1.1", "completed", "x is 42"),
+      arrival("1.1.2", "completed", "y is 7"),
+    ]);
+    const answer = agent.session.deriveMessages().at(-1);
+    assert.equal(answer.role, "assistant");
+    assert.equal(answer.content[0].text, "x is 42, y is 7");
+    assert.deepEqual(await dsh.restored(agent), agent.session.deriveMessages(), "official JSONL restore without Spine");
+  } finally {
+    await dsh.dispose();
+  }
+});
+
+test("a child beyond the subagent limit arrives errored and wakes the parent; the others run", async () => {
+  const tasks = Array.from({ length: 9 }, (_, k) => ({ summary: `T${k + 1}`, prompt: "t" }));
+  const children = Object.fromEntries(tasks.map((_, k) => [`session-1:spawn:1.1.${k + 1}`, [{ hang: true }]]));
+  const dsh = await mountDsh({
+    "session-1": [[["spine_open", { goal: "A" }]], [["spine_spawn", { tasks }]], ...afterArrivals(1, "noted")],
+    ...children,
+  });
+  try {
+    await dsh.run("start");
+    const arrivals = () => (requestsOf(dsh, "session-1").at(-1) ?? []).filter((line) => line.startsWith("user: <spine_arrival"));
+    await until(() => arrivals().length === 1);
+    assert.match(arrivals()[0], /outcome="errored"[\s\S]*subagent limit reached \(active child limit: 8\)/);
+    await until(() => Object.keys(children).filter((id) => requestsOf(dsh, id).length === 1).length === 8);
   } finally {
     await dsh.dispose();
   }

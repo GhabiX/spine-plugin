@@ -33,8 +33,12 @@ import { applySurfaceEdits, planItems, surfaceEdits, type PlanItem, type Surface
 
 export const SPINE_FEATURES: FeatureFlag[] = ["jit", "spawn"];
 
-/** Hands over the births a live commit made and where their sampling began in the log. */
-export type BirthHandler = (births: readonly SpawnBirth[], prefixEnd: number) => void;
+/**
+ * Hands over the births a live commit made and where their sampling began in
+ * the log; resolves once their children are established, so the step that
+ * follows a Spawn starts with its children already the agent's subagents.
+ */
+export type BirthHandler = (births: readonly SpawnBirth[], prefixEnd: number) => Promise<void>;
 
 /**
  * One model response carries at most one Spine operation (the core admits one
@@ -74,7 +78,7 @@ interface SpineCall {
  * same code, and when it settles does not change the result.
  */
 export class SpineAgent {
-  readonly #agent: Agent;
+  readonly agent: Agent;
   readonly #nodePrompt: string;
   readonly #born: BirthHandler;
   #adapter!: SpineHostAdapter;
@@ -95,7 +99,7 @@ export class SpineAgent {
   #fault: unknown = null;
 
   private constructor(agent: Agent, nodePrompt: string, born: BirthHandler) {
-    this.#agent = agent;
+    this.agent = agent;
     this.#nodePrompt = nodePrompt;
     this.#born = born;
   }
@@ -174,7 +178,7 @@ export class SpineAgent {
     this.#step = step;
     await this.#guard(async () => {
       if (this.#plan === null) return;
-      applySurfaceEdits(this.#agent.session, surfaceEdits(this.#surface(), this.#plan), turn, step);
+      applySurfaceEdits(this.agent.session, surfaceEdits(this.#surface(), this.#plan), turn, step);
     });
   }
 
@@ -185,7 +189,7 @@ export class SpineAgent {
     await this.#guard(async () => {
       await this.#prepare();
       this.#assertSurfaceShowsPlan();
-      const session = this.#agent.session;
+      const session = this.agent.session;
       await this.#begin(session.seq);
       // Two empty slots before the response: room for what this sampling's
       // Open, Close or Next puts in front of it (Next = Close then Open).
@@ -236,7 +240,7 @@ export class SpineAgent {
       if (event.seq === cut) await this.#guard(() => this.#continueNamespace(event.seq));
       this.accept(event);
       if (isUserSource(event) && anchorOf(eventMessage(event)) === null) {
-        throw new SpineDshError(`session ${this.#agent.id} started without Spine: its user messages carry no [U#]`);
+        throw new SpineDshError(`session ${this.agent.id} started without Spine: its user messages carry no [U#]`);
       }
       if (beginsSampling(event)) {
         await this.#guard(async () => {
@@ -255,7 +259,7 @@ export class SpineAgent {
    */
   async #continueNamespace(cut: number): Promise<void> {
     await this.#observe(cut);
-    const source = await this.#adapter.continueNamespace(this.#agent.id);
+    const source = await this.#adapter.continueNamespace(this.agent.id);
     for (const cell of source.cells) this.#sourceSeqs.set(sourceKey(cell.source_id), cell.boundary as SessionSeq);
     await this.#adapter.previewAndPublish();
   }
@@ -272,7 +276,7 @@ export class SpineAgent {
 
   /** Where the stretch of the sampling that began at `from` ends, as logged so far. */
   #end(from: number): number {
-    const next = this.#agent.session.seq;
+    const next = this.agent.session.seq;
     for (let seq = from + 1; seq < next; seq += 1) {
       if (endsSampling(this.#event(seq))) return seq;
     }
@@ -298,7 +302,7 @@ export class SpineAgent {
       if (result.type !== "committed") return;
       this.#projection = result.projection;
       // The children a live Spawn bore start from the log before its sampling.
-      if (!this.#recovering && call?.name === "spine_spawn") this.#born(this.openBirths(), sampling.from);
+      if (!this.#recovering && call?.name === "spine_spawn") await this.#born(this.openBirths(), sampling.from);
     });
   }
 
@@ -323,7 +327,7 @@ export class SpineAgent {
   }
 
   #surface(): SurfaceNode[] {
-    return this.#agent.session.surface.nodes.map((seq) => {
+    return this.agent.session.surface.nodes.map((seq) => {
       const event = this.#event(seq);
       const role = surfaceRole(event);
       return { seq, role, text: role === "spine" ? spineText(eventMessage(event)) : null };

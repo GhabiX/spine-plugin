@@ -32,9 +32,9 @@ test("Open shows the node; Close replaces it with its memory", async () => {
   );
   assert.deepEqual(run.ends, ["completed"]);
   assert.deepEqual(run.requests, [
-    ["user: [U1]\nstart"],
-    ["user: [U1]\nstart", node("1.1", "inspect"), call("spine_open", { goal: "inspect" }), staged("spine_open")],
-    ["user: [U1]\nstart", memory("1.1", "found it"), call("spine_close", { memory: "found it" }), staged("spine_close")],
+    ["user: [U1]\nstart", "context: …"],
+    ["user: [U1]\nstart", "context: …", node("1.1", "inspect"), call("spine_open", { goal: "inspect" }), staged("spine_open")],
+    ["user: [U1]\nstart", "context: …", memory("1.1", "found it"), call("spine_close", { memory: "found it" }), staged("spine_close")],
   ]);
   assert.equal(run.samplings, 3);
 });
@@ -55,13 +55,13 @@ test("Next, nesting and a second user turn: Close keeps user messages, replies a
   });
   assert.deepEqual(run.ends, ["completed", "completed"]);
   const next = [call("spine_next", { memory: "memA", goal: "B" }), staged("spine_next")];
-  assert.deepEqual(run.requests[2], ["user: [U1]\nstart", memory("1.1", "memA"), node("1.2", "B"), ...next]);
+  assert.deepEqual(run.requests[2], ["user: [U1]\nstart", "context: …", memory("1.1", "memA"), node("1.2", "B"), ...next]);
   assert.deepEqual(run.requests[4], [
-    "user: [U1]\nstart", memory("1.1", "memA"), node("1.2", "B"), ...next, "assistant: reply1",
+    "user: [U1]\nstart", "context: …", memory("1.1", "memA"), node("1.2", "B"), ...next, "assistant: reply1",
     "user: [U2]\nmore", node("1.2.1", "C"), call("spine_open", { goal: "C" }), staged("spine_open"),
   ]);
   assert.deepEqual(run.requests[6], [
-    "user: [U1]\nstart", memory("1.1", "memA"), "assistant: reply1", "user: [U2]\nmore",
+    "user: [U1]\nstart", "context: …", memory("1.1", "memA"), "assistant: reply1", "user: [U2]\nmore",
     memory("1.2.1", "memC"), memory("1.2", "memB"), call("spine_close", { memory: "memB" }), staged("spine_close"),
   ]);
 });
@@ -88,7 +88,7 @@ test("runtime context DSH adds inside a node stays in place when the node closes
   assert.deepEqual(run.ends, ["completed"]);
   assert.equal(run.requests[2].at(-1), "context: …", "DSH added runtime context inside node A");
   assert.deepEqual(run.requests[3], [
-    "user: [U1]\nstart", "context: …", memory("1.1", "memA"),
+    "user: [U1]\nstart", "context: …", "context: …", memory("1.1", "memA"),
     call("spine_close", { memory: "memA" }), staged("spine_close"),
   ]);
 });
@@ -109,7 +109,7 @@ test("a failed request and a cancelled one leave the plan as it was", async () =
     });
     assert.deepEqual(run.ends, [typeof interrupt === "function" ? "aborted" : "error", "completed"]);
     assert.deepEqual(run.requests[2], [
-      "user: [U1]\nstart", node("1.1", "A"), call("spine_open", { goal: "A" }), staged("spine_open"), "user: [U2]\nagain",
+      "user: [U1]\nstart", "context: …", node("1.1", "A"), call("spine_open", { goal: "A" }), staged("spine_open"), "user: [U2]\nagain",
     ]);
     assert.equal(run.samplings, 3);
   }
@@ -126,7 +126,7 @@ test("text cut off at max tokens is no reply: Close folds it into the node", asy
   );
   assert.deepEqual(run.ends, ["max-tokens", "completed"]);
   assert.deepEqual(run.requests[3], [
-    "user: [U1]\nstart", "user: [U2]\nmore", memory("1.1", "m"), call("spine_close", { memory: "m" }), staged("spine_close"),
+    "user: [U1]\nstart", "context: …", "user: [U2]\nmore", memory("1.1", "m"), call("spine_close", { memory: "m" }), staged("spine_close"),
   ]);
 });
 
@@ -141,7 +141,7 @@ test("bad Spine input and a second Spine call are tool errors; the agent keeps w
   assert.deepEqual(results.map((message) => message.isError === true), [true, false, true]);
   assert.match(results[0].content[0].text, /missing field `goal`/);
   assert.match(results[2].content[0].text, /only one Spine tool call is allowed per model response/);
-  assert.equal(run.requests[2][3], node("1.1", "A"));
+  assert.equal(run.requests[2][4], node("1.1", "A"));
 });
 
 test("Close with no open node is a tool error; the agent keeps working", async () => {
@@ -154,7 +154,7 @@ test("Close with no open node is a tool error; the agent keeps working", async (
   const results = run.events.filter((event) => event.type === "tool/result").map((event) => event.data.message);
   assert.deepEqual(results.map((message) => message.isError === true), [true, false]);
   assert.match(results[0].content[0].text, /no open Spine node is available to close/);
-  assert.equal(run.requests[2][3], node("1.1", "A"));
+  assert.equal(run.requests[2][4], node("1.1", "A"));
 });
 
 test("disposing an agent mid-request settles its sampling without error", async () => {

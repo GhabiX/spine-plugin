@@ -37,8 +37,8 @@ test("a resumed session keeps its open node, user numbering and Close", async ()
   );
   assert.deepEqual(run.ends, ["completed", "completed"]);
   assert.deepEqual(run.requests, [
-    ["user: [U1]\nstart", node("1.1", "A"), call("spine_open", { goal: "A" }), staged("spine_open"), "assistant: replyA", "user: [U2]\nmore"],
-    ["user: [U1]\nstart", "assistant: replyA", "user: [U2]\nmore", memory("1.1", "memA"), call("spine_close", { memory: "memA" }), staged("spine_close")],
+    ["user: [U1]\nstart", "context: …", node("1.1", "A"), call("spine_open", { goal: "A" }), staged("spine_open"), "assistant: replyA", "user: [U2]\nmore"],
+    ["user: [U1]\nstart", "context: …", "assistant: replyA", "user: [U2]\nmore", memory("1.1", "memA"), call("spine_close", { memory: "memA" }), staged("spine_close")],
   ]);
 });
 
@@ -50,7 +50,7 @@ test("a failed sampling replays as failed: the Open it staged is not committed",
   );
   assert.deepEqual(run.ends, ["error", "completed"]);
   assert.deepEqual(run.requests, [
-    ["user: [U1]\nstart", node("1.1", "A"), call("spine_open", { goal: "A" }), staged("spine_open"), "user: [U2]\nagain"],
+    ["user: [U1]\nstart", "context: …", node("1.1", "A"), call("spine_open", { goal: "A" }), staged("spine_open"), "user: [U2]\nagain"],
   ]);
 });
 
@@ -130,7 +130,7 @@ test("a Spine call whose result another extension turns into an error commits no
       : next()),
   );
   assert.deepEqual(restarted, continuous);
-  assert.deepEqual(continuous.requests[1], ["user: [U1]\nstart", call("spine_open", { goal: "A" }), "tool: blocked"]);
+  assert.deepEqual(continuous.requests[1], ["user: [U1]\nstart", "context: …", call("spine_open", { goal: "A" }), "tool: blocked"]);
   assert.ok(!continuous.requests.flat().includes(node("1.1", "A")));
 });
 
@@ -157,7 +157,7 @@ test("a stream that ends without a finish chunk stopped by itself: its reply sur
   ]);
   assert.deepEqual(restarted, continuous);
   assert.deepEqual(continuous.requests.at(-1), [
-    "user: [U1]\nstart", "assistant: replyA", "user: [U2]\nmore", memory("1.1", "mA"), call("spine_close", { memory: "mA" }), staged("spine_close"),
+    "user: [U1]\nstart", "context: …", "assistant: replyA", "user: [U2]\nmore", memory("1.1", "mA"), call("spine_close", { memory: "mA" }), staged("spine_close"),
   ]);
 });
 

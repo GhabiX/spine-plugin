@@ -113,13 +113,20 @@ export class SpawnChildren {
         diagnostic: cause instanceof Error ? cause.message : String(cause),
       }, run.controller.signal.aborted))
       .then((arrival) => {
-        this.#runs.delete(key);
-        if (!run.disposed) {
-          this.#handed.set(key, arrival);
-          this.#deliver(arrival, run.wake);
-        }
-        this.#notify();
+        if (this.#runs.get(key) === run) this.#end(key, run, arrival);
       });
+  }
+
+  /**
+   * Hands over a running child's arrival now, ahead of its runner, for a host
+   * that releases the child as soon as it is done: the arrival is in the
+   * parent before the host can see no child running. The runner's own result
+   * is then dropped.
+   */
+  arrive(arrival: SpawnArrival): void {
+    const key = arrival.producer.join(".");
+    const run = this.#runs.get(key);
+    if (run !== undefined) this.#end(key, run, arrival);
   }
 
   /** Hands over an arrival that needs no run, such as one recovered from a child's record. */
@@ -167,6 +174,15 @@ export class SpawnChildren {
   next(): Promise<void> {
     if (this.#runs.size === 0) return Promise.resolve();
     return new Promise((resolve) => this.#waiters.push(resolve));
+  }
+
+  #end(key: string, run: ChildRun, arrival: SpawnArrival): void {
+    this.#runs.delete(key);
+    if (!run.disposed) {
+      this.#handed.set(key, arrival);
+      this.#deliver(arrival, run.wake);
+    }
+    this.#notify();
   }
 
   #tracked(producer: readonly number[]): boolean {

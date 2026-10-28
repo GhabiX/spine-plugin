@@ -42,15 +42,22 @@ loads it as the Cordis plugin `spinejit`.
   of its log with the same code, or up to the end of the log. A
   session whose conversation started without this plugin is refused: its user
   messages carry no `[U#]`.
-- Spawn: each child is a subagent in the same world, forked from its parent's
-  log just before the sampling whose Spawn bore it (session id
-  `<parent>:spawn:<node>`). It gets its assignment as a user message and ends
-  by calling `spine_child_return` once, after its own children have arrived.
-  A child is judged each time it goes idle: returned is completed, cancelled
-  by its parent is aborted, and idle with every child of its own joined but
-  no return is errored.
+- Spawn: each child is a DSH subagent of its parent, started through the
+  subagent service under the plugin's provider `spine`, so DSH owns its
+  agent, capacity slot and teardown, and a host that waits for subagents
+  (headless, for one) waits for it. Its seed is the parent's log just before
+  the sampling whose Spawn bore it (session id `<parent>:spawn:<node>`). The
+  step after a Spawn commits starts once its children are established. A
+  child gets its assignment as a user message and ends by calling
+  `spine_child_return` once, after its own children have arrived. It is
+  judged each time it goes idle after a turn of its own: returned is
+  completed, cancelled by its parent is aborted, and idle with every child of
+  its own joined but no return is errored. A child DSH refuses to start, as
+  past the active subagent limit, arrives errored with DSH's reason.
 - An arrival is a user message the parent receives once, while its birth is
-  open; it wakes the parent unless the parent was stopped. Stopping the
+  open; it wakes the parent unless the parent was stopped. It is handed over
+  on the child's idle, before DSH releases the child, so a host never sees
+  a running parent done with an arrival still to come. Stopping the
   parent stops its children, whose aborted arrivals wait for the next turn. A
   Close or Next in the sampling that sees the last arrival is accepted: the
   commit joins the arrival first. A restarted parent receives a child that

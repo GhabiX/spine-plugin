@@ -1,10 +1,10 @@
 import type { Context } from "@deepseek-ai/cordis";
 import type { Agent } from "@deepseek-ai/dsh-agent";
-import { createUserMessage } from "@deepseek-ai/dsh-llm";
-import { buildForkSeed, SessionId, SessionLogOffset, SessionSeq, type SessionEvent } from "@deepseek-ai/dsh-session";
+import { buildForkSeed, SessionId, SessionSeq, type SessionEvent } from "@deepseek-ai/dsh-session";
 import type {} from "@deepseek-ai/dsh-session-persistence";
+import type { SubagentActivation, SubagentProvider } from "@deepseek-ai/dsh-subagent";
 import type { ToolDefinition } from "@deepseek-ai/dsh-tools";
-import type { SpawnTask } from "@spinejit/spine-sdk";
+import type { SpawnArrival, SpawnTask } from "@spinejit/spine-sdk";
 import {
   SPINE_CHILD_RETURN_TOOL,
   spineChildAssignmentText,
@@ -17,6 +17,9 @@ import {
 import type { SpineAgent } from "./agent.js";
 import { SpineDshError } from "./events.js";
 
+/** The subagent provider every Spawn child runs under. */
+export const SPINE_SUBAGENT_PROVIDER = "spine";
+
 /** The live Spine state of every agent in this world, by agent id. */
 export interface SpineWorld {
   ctx: Context;
@@ -24,6 +27,8 @@ export interface SpineWorld {
   children: ReadonlyMap<string, SpawnChildren>;
   /** What to check each time a Spawn child agent goes idle, by agent id. */
   idle: Map<string, () => void>;
+  /** The seed of each Spawn child being started, by its session id. */
+  starting: Map<string, readonly SessionEvent[]>;
 }
 
 /** A child's session id: fixed by its parent session and birth, so a restarted parent finds it. */
@@ -47,10 +52,27 @@ export function childReturns(events: readonly SessionEvent[]): string[] {
 }
 
 /**
- * One attempt of one Spawn child: a subagent forked from its parent's log just
- * before the sampling that bore it, given its assignment, and run until it
- * returns its memory, goes idle with every child of its own joined and no
- * return, or its parent cancels it. It is judged each time it goes idle.
+ * Spawn children are DSH subagents: the subagent manager creates each one,
+ * holds its capacity slot, joins it for the host and tears it down. This
+ * provider only hands over the child's seed.
+ */
+export function spineSubagentProvider(starting: ReadonlyMap<string, readonly SessionEvent[]>): SubagentProvider {
+  return {
+    name: SPINE_SUBAGENT_PROVIDER,
+    capabilities: { agentOptions: false, agentPreset: false, outputSchema: false, depthLimit: false },
+    inheritsParentContext: true,
+    prepareContinuable: (request) => Promise.resolve({ seed: starting.get(request.sessionId)! }),
+  };
+}
+
+/**
+ * One Spawn child: a subagent forked from its parent's log just before the
+ * sampling that bore it, given its assignment. It is judged each time it goes
+ * idle after a turn of its own: it arrives once it has returned its memory,
+ * has every child of its own joined and no return, or its parent cancelled
+ * it. The arrival is handed over on that idle, before the manager can release
+ * the child, so a host that waits for its subagents never sees the parent
+ * done with an arrival still to come.
  */
 export async function executeChild(
   world: SpineWorld,
@@ -59,60 +81,62 @@ export async function executeChild(
   peers: readonly SpawnTask[],
   prefixEnd: number,
   signal: AbortSignal,
-): Promise<SpawnChildTerminal> {
-  const header = parent.session.header;
-  const handle = await world.ctx.agents.create({
-    sessionId: childSessionId(parent.id, birth.producer),
-    parentAgent: parent,
-    seed: buildForkSeed(parent.session.snapshotEvents(), SessionSeq(prefixEnd - 1)),
-    inheritedEventCount: SessionLogOffset(prefixEnd),
-    meta: {
-      ...(header.cwd === undefined ? {} : { cwd: header.cwd }),
-      parentSession: parent.id,
-      isSeeded: true,
-      origin: "subagent",
-      delegationDepth: (header.delegationDepth ?? 0) + 1,
-    },
-    agentOptions: parent.options,
-    signal,
-    setup: (agentCtx) => {
-      agentCtx.tools.register(returnTool(world.agents));
-    },
-  });
-  const child = handle.agent;
-  let judge!: () => void;
-  const terminal = new Promise<SpawnChildTerminal>((resolve) => {
-    judge = () => {
-      const memory = childReturns(child.session.snapshotEvents())[0];
-      if (memory !== undefined) resolve({ outcome: "completed", memory });
-      else if (signal.aborted) resolve({ outcome: "aborted" });
-      // An open birth's arrival is still to come, and it wakes the child.
-      else if (world.agents.get(child.id)!.openBirths().length === 0) {
-        resolve({ outcome: "errored", diagnostic: `the child went idle without calling ${SPINE_CHILD_RETURN_TOOL}` });
-      }
-    };
-  });
-  // Cancelling an idle child starts no turn, so it is judged at once.
-  const cancel = () => {
-    child.cancel({ kind: "parent" });
-    world.children.get(child.id)!.stop();
-    if (child.status === "idle") judge();
+  arrive: (arrival: SpawnArrival) => void,
+  started: () => void,
+): Promise<SpawnArrival> {
+  const id = childSessionId(parent.id, birth.producer);
+  let arrived!: (arrival: SpawnArrival) => void;
+  const arrival = new Promise<SpawnArrival>((resolve) => { arrived = resolve; });
+  let ended = false;
+  const end = (terminal: SpawnChildTerminal) => {
+    if (ended) return;
+    ended = true;
+    const result = toArrival(birth.producer, terminal, signal.aborted);
+    arrive(result);
+    arrived(result);
   };
-  world.idle.set(child.id, judge);
-  signal.addEventListener("abort", cancel, { once: true });
-  try {
-    if (signal.aborted) {
-      cancel();
-    } else {
-      const text = spineChildAssignmentText(birth.task, peers);
-      child.followup(createUserMessage({ content: [{ type: "text", text }], source: { kind: "user" } }));
+  world.idle.set(id, () => {
+    const events = world.agents.get(id)!.agent.session.ownEvents();
+    if (!events.some((event) => event.type === "turn/end")) return;
+    const memory = childReturns(events)[0];
+    if (memory !== undefined) end({ outcome: "completed", memory });
+    else if (signal.aborted) end({ outcome: "aborted" });
+    // An open birth's arrival is still to come, and it wakes the child.
+    else if (world.agents.get(id)!.openBirths().length === 0) {
+      end({ outcome: "errored", diagnostic: `the child went idle without calling ${SPINE_CHILD_RETURN_TOOL}` });
     }
-    return await terminal;
+  });
+  // Cancelling an idle child starts no turn, so it arrives at once. A child
+  // still being started is cancelled by the manager, through the same signal.
+  const cancel = () => {
+    const child = world.agents.get(id)?.agent;
+    if (child === undefined) return;
+    world.children.get(id)?.stop();
+    child.cancel({ kind: "parent" });
+    if (child.status === "idle") end({ outcome: "aborted" });
+  };
+  signal.addEventListener("abort", cancel, { once: true });
+  world.starting.set(id, buildForkSeed(parent.session.snapshotEvents(), SessionSeq(prefixEnd - 1)));
+  let activation: SubagentActivation | undefined;
+  try {
+    try {
+      activation = await world.ctx.subagents.startActivation({
+        provider: SPINE_SUBAGENT_PROVIDER,
+        label: birth.task.summary,
+        childId: id,
+        request: { parent, prompt: [{ type: "text", text: spineChildAssignmentText(birth.task, peers) }] },
+        signal,
+        delivery: "caller",
+      });
+    } finally {
+      world.starting.delete(id);
+      started();
+    }
+    return await arrival;
   } finally {
     signal.removeEventListener("abort", cancel);
-    world.idle.delete(child.id);
-    await world.ctx.sessions.flush(child.session);
-    await handle.dispose();
+    world.idle.delete(id);
+    await activation?.dispose();
   }
 }
 
@@ -145,7 +169,7 @@ export async function recoverChildren(
 }
 
 /** The child's return: accepted once, after the child's own children have arrived; it ends the turn. */
-function returnTool(agents: ReadonlyMap<string, SpineAgent>): ToolDefinition {
+export function returnTool(agents: ReadonlyMap<string, SpineAgent>): ToolDefinition {
   let returned = false;
   return {
     name: SPINE_CHILD_RETURN_TOOL,

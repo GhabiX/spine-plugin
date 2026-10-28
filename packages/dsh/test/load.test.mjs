@@ -11,7 +11,7 @@ test("the Loader mounts the plugin and the loop runs and restores", async () => 
     const agent = await dsh.run("hi");
     assert.equal(dsh.adapter.requests.length, 1);
     const messages = agent.session.deriveMessages();
-    assert.deepEqual(messages.map((message) => message.role), ["system", "user", "assistant"]);
+    assert.deepEqual(messages.map((message) => message.role), ["system", "user", "user", "assistant"]);
     assert.deepEqual(await dsh.restored(agent), messages);
   } finally {
     await dsh.dispose();

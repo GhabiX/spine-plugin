@@ -3,16 +3,16 @@ import type { Agent } from "@deepseek-ai/dsh-agent";
 import { isAgentLoopRequest } from "@deepseek-ai/dsh-llm";
 import type {} from "@deepseek-ai/dsh-system-prompt";
 import type { ToolDefinition } from "@deepseek-ai/dsh-tools";
-import { isSpineToolName, loadSpineConfigToml, runSpawnChild, SpawnChildren } from "@spinejit/spine-sdk/host";
+import { isSpineToolName, loadSpineConfigToml, SpawnChildren } from "@spinejit/spine-sdk/host";
 import { createNodeSpineRuntime, type SpineToolSpec } from "@spinejit/spine-sdk/node";
 
 import { SPINE_FEATURES, SpineAgent } from "./agent.js";
 import { arrivalMessage, SpineDshError } from "./events.js";
-import { executeChild, recoverChildren, type SpineWorld } from "./spawn.js";
+import { executeChild, recoverChildren, returnTool, spineSubagentProvider, type SpineWorld } from "./spawn.js";
 
 /** The Cordis plugin DeepSeek Harness loads, by package name, from a bundle. */
 export const name = "spinejit";
-export const inject = ["agents", "llm", "sessionPersistence", "sessions", "systemPrompt", "tools"];
+export const inject = ["agents", "llm", "sessionPersistence", "sessions", "subagents", "systemPrompt", "tools"];
 
 export function apply(ctx: Context): void {
   const configToml = loadSpineConfigToml();
@@ -28,7 +28,8 @@ export function apply(ctx: Context): void {
 
   const agents = new Map<string, SpineAgent>();
   const children = new Map<string, SpawnChildren>();
-  const world: SpineWorld = { ctx, agents, children, idle: new Map() };
+  const world: SpineWorld = { ctx, agents, children, idle: new Map(), starting: new Map() };
+  ctx.subagents.registerProvider(spineSubagentProvider(world.starting));
   ctx.systemPrompt.section({ name: "spinejit", order: ctx.systemPrompt.getSectionOrder("TOOLS_SDK"), text: prompt });
   for (const tool of tools) ctx.tools.register(spineTool(tool, agents));
 
@@ -36,6 +37,7 @@ export function apply(ctx: Context): void {
     agents.get(session.id)?.accept(event);
   });
   ctx.on("agent/created", async ({ agent }) => {
+    if (world.starting.has(agent.id)) agent.ctx.tools.register(returnTool(agents));
     // An arrival enters only the session that bore it, once, while its birth is open.
     const own = new SpawnChildren((arrival, wake) => {
       const producer = arrival.producer.join(".");
@@ -43,13 +45,14 @@ export function apply(ctx: Context): void {
       if (wake) agent.steer(arrivalMessage(arrival));
       else agent.inject(arrivalMessage(arrival));
     });
-    const spine = await SpineAgent.create(agent, configToml, (births, prefixEnd) => {
-      own.launch(births, (birth, peers, signal) => runSpawnChild({
-        producer: birth.producer,
-        task: birth.task,
-        signal,
-        executor: { execute: () => executeChild(world, agent, birth, peers, prefixEnd, signal) },
-      }));
+    const spine = await SpineAgent.create(agent, configToml, async (births, prefixEnd) => {
+      const started: Promise<void>[] = [];
+      own.launch(births, (birth, peers, signal) => {
+        let start!: () => void;
+        started.push(new Promise((resolve) => { start = resolve; }));
+        return executeChild(world, agent, birth, peers, prefixEnd, signal, (arrival) => own.arrive(arrival), start);
+      });
+      await Promise.all(started);
     });
     agents.set(agent.id, spine);
     children.set(agent.id, own);

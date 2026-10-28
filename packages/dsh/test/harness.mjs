@@ -9,6 +9,7 @@ import { mountAgentLoopTestDependencies, mountAgentLoopTestHarness } from "@deep
 import { createUserMessage, LlmAdapter } from "@deepseek-ai/dsh-llm";
 import { Session } from "@deepseek-ai/dsh-session";
 import * as Jsonl from "@deepseek-ai/dsh-session-persistence-jsonl";
+import SubagentRuntime from "@deepseek-ai/dsh-subagent";
 
 const PLUGIN = new URL("../dist/index.js", import.meta.url).href;
 
@@ -69,8 +70,9 @@ export class ScriptedAdapter extends LlmAdapter {
 export async function mountDsh(replies, { plugin = true, root } = {}) {
   root ??= await mkdtemp(join(tmpdir(), "dsh-spinejit-"));
   const ctx = new Context();
-  await mountAgentLoopTestDependencies(ctx);
+  await mountAgentLoopTestDependencies(ctx, { workingDirectory: true });
   await ctx.plugin(Jsonl, { root: join(root, "sessions"), compression: "none" });
+  await ctx.plugin(SubagentRuntime);
   await ctx.plugin(Loader);
   if (plugin) {
     await ctx.loader.root.update([{ id: "spinejit", name: PLUGIN }]);
@@ -100,6 +102,18 @@ export async function mountDsh(replies, { plugin = true, root } = {}) {
     async resume(id) {
       const { agent } = await ctx.agents.resume({ resumeSessionId: id, agentOptions: { provider: "scripted", model: "scripted" } });
       this.agent = agent;
+      return agent;
+    },
+    /** Run one task as `dsh --profile headless` does: until the agent and every subagent it waits on are done. */
+    async runHeadless(text) {
+      const agent = await harness.create(`session-${++sessions}`, { provider: "scripted", model: "scripted" }, { cwd: root });
+      this.agent = agent;
+      agent.followup(createUserMessage({ content: [{ type: "text", text }], source: { kind: "user" } }));
+      while (true) {
+        await agent.whenIdle();
+        const idleSeq = agent.session.seq;
+        if (!await ctx.subagents.waitForChildren(agent) && agent.status === "idle" && agent.session.seq === idleSeq) break;
+      }
       return agent;
     },
     async send(agent, text) {
