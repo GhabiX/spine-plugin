@@ -4,28 +4,20 @@
 
 English | [中文](README.zh-CN.md)
 
-**Long tasks, short context.** Spine lets your Pi agent fold each finished step into a few lines of memory. What it learned stays; the thousands of lines it read along the way leave the context.
+**Your agent's context, shaped like its task.**
 
-```
-Without Spine, every request carries all of this:
-  cat src/cache.py            900 lines
-  cat tests/api_test.py     1,200 lines
-  pytest -x                   400 lines of log
+A long task is a tree of subtasks, but an agent's context is a flat log: finished work, dead ends, and the current step pile up in one stream, leaving the agent to guess where each piece of work begins and ends. Spine aligns the context with the task tree. The agent opens each subtask with a goal and closes it with a memory; Spine keeps the current subtask in full and automatically folds each finished one into its memory.
 
-With Spine, each finished step is a line or two:
-  ✓ read cache.py   warm() is async and nothing awaits it
-  ✓ read the test   setUp races the cache warm-up
-  ✓ fix             setUp now awaits warm(); 40/40 pass
-```
+![The Spine tree in Pi: each step of the task, and the memory a finished step left behind](doc/images/spine-tree.png)
 
-In the Spine paper ([arXiv:2610.37224](https://arxiv.org/abs/2610.37224)), Pi with Spine scores 9.5–17.5% higher than plain Pi on SWE-Milestone; with Gemini 3.8 Flash, it also costs 45% less.
+Less context, better results: in the Spine paper ([arXiv:2610.37224](https://arxiv.org/abs/2610.37224)), Pi with Spine scores 9.5–17.5% higher than plain Pi on SWE-Milestone; with Gemini 3.8 Flash, it also costs 45% less.
 
 ## Highlights
 
-- **The agent writes its own notes.** It opens a step, does the work, and closes it with a memory written on the spot—while it still knows what mattered.
-- **Your conversation stays.** Your messages and the agent's replies remain intact; only the working history goes.
-- **The prompt cache keeps hitting.** Everything before the current step stays byte-for-byte identical.
-- **Subagents in parallel.** `spine_spawn` runs child agents side by side; each result lands back in the parent when done.
+- **Explicit boundaries and state.** Every subtask has a goal, a start, and an end. The agent always sees the goals above it, the step it is on, and what finished steps found.
+- **Managed automatically.** Closing a step shrinks the context—no separate summarizing pass. The agent writes the memory on the spot, while it still knows what mattered.
+- **Your conversation stays, the cache keeps hitting.** Your messages and the agent's replies are kept, and everything before the current step stays byte-for-byte identical.
+- **Subtrees in parallel.** `spine_spawn` hands a subtree to a child agent; its result comes back into the parent's tree.
 
 ## Install
 
@@ -33,7 +25,7 @@ In the Spine paper ([arXiv:2610.37224](https://arxiv.org/abs/2610.37224)), Pi wi
 pi install npm:@spinejit/pi-spinejit
 ```
 
-That's it: start Pi 1.1.0 and the agent uses Spine on its own. It gets four tools: `spine_open`, `spine_close`, `spine_next`, and `spine_spawn`. Details: [packages/plugin](packages/plugin/README.md).
+That's it: start Pi 1.1.0 and the agent works in steps on its own. The tree above the input shows where it is; `/spine-tree` browses the tree and opens any step's memory. Details: [packages/plugin](packages/plugin/README.md).
 
 Upgrading from `@spinejit/spine-plugin`: run `pi remove npm:@spinejit/spine-plugin` first.
 
