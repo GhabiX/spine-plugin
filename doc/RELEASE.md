@@ -7,7 +7,7 @@ The SpineTree release gate that preceded this section described the former
 ## npm publishing
 
 The public Pi extension is `@spinejit/pi-spinejit`; SDK and host remain
-`@spinejit/spine-sdk` and `@spinejit/spine-host`. All three currently use `0.1.0`.
+`@spinejit/spine-sdk` and `@spinejit/spine-host`; each is versioned on its own.
 The rename changes the plugin package and host registration identity; compiled
 entrypoints and exported subpaths are preserved. Update companion packages
 together with their new import and host dependency references.
