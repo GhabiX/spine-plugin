@@ -1,33 +1,20 @@
 import { getMarkdownTheme, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   SPINE_TREE_VIEW_REQUEST,
-  queryPiSpineMode,
-  type PiSpineMode,
   type SpineTreeViewConnection,
   type SpineTreeViewLease,
   type SpineTreeViewRequest,
-} from "@spinejit/pi-spinejit/pi/tree-view";
+} from "../tree-view-contract.js";
 
 import { SpineTreeBrowser } from "./browser.js";
 import { createNavigationData } from "./data.js";
 
-/** Optional companion: no tools, runtime, context hooks, or widget ownership. */
-export default function spineTreeNavigation(pi: ExtensionAPI): void {
+/** `/spine-tree`: browses the tree the core offers; owns no tools, runtime, context hooks, or widget. */
+export function registerSpineTreeNavigation(pi: ExtensionAPI): void {
   let active = false;
-  const modes = new Map<string, PiSpineMode>();
-  let mode: PiSpineMode = "sdk";
-  pi.on("session_start", (_event, ctx) => {
-    const id = ctx.sessionManager.getSessionId();
-    mode = modes.get(id) ?? queryPiSpineMode(pi, ctx);
-    modes.set(id, mode);
-  });
   pi.registerCommand("spine-tree", {
     description: "Navigate the bottom Spine tree and read memory",
     handler: async (args, ctx) => {
-      if (mode === "st") {
-        if (ctx.hasUI) ctx.ui.notify("This session uses SpineTree; use /st or shell st branch/show/context.", "info");
-        return;
-      }
       if (ctx.mode !== "tui") {
         if (ctx.hasUI) ctx.ui.notify("Spine tree navigation requires Pi interactive mode.", "info");
         return;

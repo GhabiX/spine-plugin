@@ -112,7 +112,7 @@ session. Install dependencies before building; the plugin depends on the matchin
 SDK/host packages and Pi 1.1.0 rather than bundling them. See the
 [package guide](../packages/plugin/README.md#pi-sdk-installation-and-updates).
 
-It registers the four canonical tools, has no browsing slash commands, and
+It registers the four canonical tools and the `/spine-tree` command, and
 uses `@spinejit/spine-sdk/node` for the packaged WASM runtime.
 Pi reads `packages/sdk/spine.toml` once per extension activation. The tool
 catalog and default session runtime share that configuration snapshot; tree
@@ -146,16 +146,16 @@ In interactive Pi TUI mode it renders a folded SpineCodex-style pretty tree as a
 `aboveEditor` widget keyed by `spine-tree`, with one blank row below the tree
 to separate it from the input border, refreshed only when the display
 signature changes. A running Spawn child shows `◐` in the tree until its result arrives.
-The optional [`@spinejit/spinetree-navigation`](../packages/spinetree-navigation/README.md)
-Pi extension adds `/spine-tree [node-id]`: navigate this same bottom tree and
-read node memory above it. It works in regular TUI mode, without
-modifying Pi or moving the execution cursor. The core alone retains the default
-tree; the old print-only `/spine-tree` command is intentionally no longer registered.
+`/spine-tree [node-id]` navigates this same bottom tree and reads node memory
+above it (`packages/plugin/src/pi/navigation/`; until 2026-10-29 the separate
+`@spinejit/spinetree-navigation` package, archived in
+`archive/spinetree_navigation_20261029/`). It works in regular TUI mode,
+without modifying Pi or moving the execution cursor. It opens with the cursor's
+path and children expanded, as the bottom tree shows them.
 
 The core is the sole widget owner. Navigation requests a copied read-only
-snapshot through the versioned `spinejit:tree-view:v1` Pi event and temporarily
-contributes a bounded view via `@spinejit/pi-spinejit/pi/tree-view`. Discovery
-occurs when the command runs, so either extension load order works. View failures
+snapshot through the versioned `spinejit:tree-view:v1` Pi event when the command
+runs and temporarily contributes a bounded view. View failures
 stay inside the UI error boundary. Background publications update the default
 tree while the browser holds its snapshot; releasing the view displays the latest
 tree. This is an in-process extension contract, not a security sandbox.

@@ -14,6 +14,7 @@ function fixture() {
     },
     on(name, handler) { const list = handlers.get(name) ?? []; list.push(handler); handlers.set(name, list); },
     registerFlag() {}, getFlag() { return false; },
+    registerCommand() {},
     registerTool(tool) {
       tools.set(tool.name, tool);
       active = active.filter(name => name !== tool.name);

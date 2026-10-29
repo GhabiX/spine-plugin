@@ -1,6 +1,6 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Markdown, truncateToWidth, wrapTextWithAnsi, type KeybindingsManager, type MarkdownTheme } from "@earendil-works/pi-tui";
-import type { SpineTreeView } from "@spinejit/pi-spinejit/pi/tree-view";
+import type { SpineTreeView } from "../tree-view-contract.js";
 import {
   spineTreeBranch,
   spineTreeBrand,
@@ -8,7 +8,7 @@ import {
   spineTreeLabel,
   spineTreeMarker,
   spineTreeMarkerText,
-} from "@spinejit/pi-spinejit/pi/tree-style";
+} from "../tree-style.js";
 
 import type { NavigationData, NavigationNode } from "./data.js";
 
@@ -41,11 +41,8 @@ export class SpineTreeBrowser implements SpineTreeView {
     this.byId = new Map(options.data.nodes.map(node => [node.id, node]));
     const initial = options.initialNodeId ?? options.data.cursor;
     this.selected = this.byId.has(initial) ? initial : options.data.nodes[0]?.id ?? "";
-    let parent = this.byId.get(this.selected)?.parent;
-    while (parent) {
-      this.expanded.add(parent);
-      parent = this.byId.get(parent)?.parent;
-    }
+    // Open as the bottom tree shows it: the selected node's path and its children.
+    for (let id: string | null | undefined = this.selected; id; id = this.byId.get(id)?.parent) this.expanded.add(id);
     this.locateSelected();
     if (options.initialNodeId && this.byId.has(options.initialNodeId)) {
       this.reading = true;
@@ -87,7 +84,7 @@ export class SpineTreeBrowser implements SpineTreeView {
       return text;
     });
     const sectionCount = this.memorySections?.length ?? 0;
-    const title = `Memory · ${node.id} · ${this.fullMemory ? "完整返回内容" : "本节点总结"} · 第 ${this.memorySectionIndex + 1}/${Math.max(1, sectionCount)} 段 · 第 ${this.memorySectionOffset + 1} 行`;
+    const title = `Memory · ${node.id} · ${this.fullMemory ? "full memory" : "summary"} · section ${this.memorySectionIndex + 1}/${Math.max(1, sectionCount)} · line ${this.memorySectionOffset + 1}`;
     return [
       ...(this.reading ? [this.options.theme.fg("accent", title), ...body, this.options.theme.fg("dim", "─".repeat(width))] : []),
       `${this.options.theme.fg("dim", "• ")}${spineTreeBrand("Spine Tree", this.options.theme)}${this.options.theme.fg("dim", visible.length > treeHeight ? ` · ${index + 1}/${visible.length}` : "")}`,
@@ -99,13 +96,13 @@ export class SpineTreeBrowser implements SpineTreeView {
     const keys = this.options.keybindings;
     const glyphs: Record<string, string> = { up: "↑", down: "↓", left: "←", right: "→", escape: "Esc", enter: "Enter", tab: "Tab", pageUp: "PgUp", pageDown: "PgDn", pageup: "PgUp", pagedown: "PgDn" };
     const key = (action: Parameters<typeof keys.getKeys>[0]) => {
-      const binding = keys.getKeys(action)[0] ?? "未绑定";
+      const binding = keys.getKeys(action)[0] ?? "unbound";
       return this.options.theme.fg("accent", glyphs[binding] ?? binding);
     };
     const pair = (a: Parameters<typeof keys.getKeys>[0], b: Parameters<typeof keys.getKeys>[0]) => `${key(a)}/${key(b)}`;
     const controls = this.reading
-      ? [ `${pair("tui.select.up", "tui.select.down")} 滚动`, `${pair("tui.select.pageUp", "tui.select.pageDown")} 翻页`, `${key("tui.input.tab")} ${this.fullMemory ? "本节点总结" : "完整返回内容"}`, `${key("tui.select.cancel")} 返回树` ]
-      : [ `${pair("tui.select.up", "tui.select.down")} 选节点`, `${pair("tui.editor.cursorLeft", "tui.editor.cursorRight")} 收起/展开`, `${key("tui.select.confirm")} 查看记忆`, `${key("tui.select.cancel")} 退出` ];
+      ? [ `${pair("tui.select.up", "tui.select.down")} scroll`, `${pair("tui.select.pageUp", "tui.select.pageDown")} page`, `${key("tui.input.tab")} ${this.fullMemory ? "summary" : "full memory"}`, `${key("tui.select.cancel")} back` ]
+      : [ `${pair("tui.select.up", "tui.select.down")} select`, `${pair("tui.editor.cursorLeft", "tui.editor.cursorRight")} collapse/expand`, `${key("tui.select.confirm")} read memory`, `${key("tui.select.cancel")} exit` ];
     return width > 0 ? wrapTextWithAnsi(this.options.theme.fg("dim", controls.join(" · ")), width) : [];
   }
 

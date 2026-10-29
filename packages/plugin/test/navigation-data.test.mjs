@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createNodeSpineRuntime } from '@spinejit/spine-sdk/node';
-import { createNavigationData } from '../dist/data.js';
+import { createNavigationData } from '../dist/pi/navigation/data.js';
 
 async function fixture(epoch = 0) {
   const runtime = createNodeSpineRuntime({ thread: 'original', epoch, features: ['jit', 'spawn'] });

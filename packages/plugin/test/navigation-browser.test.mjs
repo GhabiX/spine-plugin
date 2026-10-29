@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
-import { SpineTreeBrowser } from "../dist/browser.js";
-import extension from "../dist/extension.js";
+import { SpineTreeBrowser } from "../dist/pi/navigation/browser.js";
+import { registerSpineTreeNavigation } from "../dist/pi/navigation/index.js";
 
 const plain = text => text;
 const markdownTheme = Object.fromEntries([
@@ -11,16 +11,23 @@ const markdownTheme = Object.fromEntries([
 ].map(key => [key, plain]));
 const keybindings = { matches: (input, action) => input === action, getKeys: action => [action] };
 const node = (id, parent, children = [], status = "Closed") => ({ id, parent, children, summary: `任务 ${id}`, status, kind: parent === null ? "RootEpoch" : "Task" });
-function fixture() {
+function fixture(cursor = "1.2") {
   const data = {
     nodes: [node("1", null, ["1.1", "1.2"]), node("1.1", "1", ["1.1.1"], "Opened"), node("1.1.1", "1.1"), node("1.2", "1")],
-    cursor: "1.2",
+    cursor,
     memorySections: (id, full) => [`${full ? "Full returned memory" : "Own summary"} ${id}\n\n${Array.from({ length: 30 }, (_, i) => `memory line ${i}`).join("\n\n")}`],
   };
   let closed = 0;
   const browser = new SpineTreeBrowser({ data, theme: { fg: (_color, text) => text, bold: text => text }, markdownTheme, keybindings, redraw() {}, close() { closed++; } });
   return { browser, data, closed: () => closed };
 }
+
+test("opens with the cursor's path and children expanded, as the bottom tree shows", () => {
+  const output = stripTerminalSequences(fixture("1").browser.render(80, 20).join("\n"));
+  assert.match(output, /1\.1 /);
+  assert.match(output, /1\.2 /);
+  assert.doesNotMatch(output, /1\.1\.1/);
+});
 
 test("navigation keeps node identity and closes memory and tree in two stages", () => {
   const { browser, data, closed } = fixture();
@@ -123,8 +130,8 @@ test("memory reader advances across sections without joining them into one docum
 function extensionHarness(offers) {
   const commands = new Map();
   const notices = [];
-  let widgetWrites = 0, startup;
-  extension({ on: (_name, handler) => { startup = handler; }, registerCommand: (name, command) => commands.set(name, command),
+  let widgetWrites = 0;
+  registerSpineTreeNavigation({ registerCommand: (name, command) => commands.set(name, command),
     events: { emit: (channel, request) => { if (channel === "spinejit:tree-view:v1") offers(request); } } });
   const ctx = {
     cwd: "/isolated-navigation", mode: "tui", hasUI: true,
@@ -132,7 +139,6 @@ function extensionHarness(offers) {
     navigateTree: async () => assert.fail("browsing must not switch the execution session"),
     ui: { notify: (text, severity) => notices.push({ text, severity }), setWidget() { widgetWrites++; }, custom() { assert.fail("must not open a custom UI"); } },
   };
-  startup({}, ctx);
   return { commands, ctx, notices, writes: () => widgetWrites };
 }
 
@@ -194,7 +200,7 @@ test("shared green branding and marker colors survive selection; help wraps with
   assert.ok(lines.some(line => line.startsWith(">") && line.includes("\x1b[92m◉")));
   assert.ok(lines.some(line => stripTerminalSequences(line).includes("    ├")));
   const controls = browser.renderControls(32);
-  assert.match(controls.join(" "), /退出/);
+  assert.match(controls.join(" "), /exit/);
   assert.ok(controls.every(line => visibleWidth(line) <= 32));
 });
 

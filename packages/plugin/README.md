@@ -10,6 +10,18 @@ pi install npm:@spinejit/pi-spinejit
 Developed and tested against Pi `1.1.0`. The last state developed
 against Pi 0.87.1 is tagged `pi-0.87-final`.
 
+## Browsing the tree
+
+The tree above the input shows every step: `✓` finished, `◉` where the agent is.
+Run `/spine-tree` to browse it, or `/spine-tree 1.2` to open node 1.2's memory.
+
+- Up/down select a node; left/right collapse or expand; Enter reads its memory.
+- In memory, up/down scroll and PageUp/PageDown turn pages. Tab switches between
+  the node's own summary and its full memory, which includes what its children
+  returned. Escape goes back to the tree, then exits.
+
+Browsing does not switch the session, move the agent or send a message.
+
 ## Recommended Pi plugins
 
 We also publish these Pi plugins, which work alongside this one:
@@ -102,7 +114,7 @@ so the formal `dist` entry is also the explicit child entry.
 
 ## SpineTree / SDK session modes
 
-The same Pi configuration may load this package, navigation, and the SpineTree
+The same Pi configuration may load this package and the SpineTree
 L1/native artifact. At `session_start`, the plugin synchronously queries L1 on
 `pi.events` channel `spinetree:mode` with `{ cwd, sessionId, mode? }`. Only L1
 owns discovery; no responder means `sdk`. The decision is frozen for that

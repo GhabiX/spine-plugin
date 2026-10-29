@@ -76,6 +76,7 @@ import {
 import { buildPiReplayPlan, recoverPiSession, type PiBranchEntry, type PiReplaySource } from "./recovery.js";
 import { SpineTreeDisplay } from "./tree-view.js";
 import { SPINE_TREE_VIEW_REQUEST } from "./tree-view-contract.js";
+import { registerSpineTreeNavigation } from "./navigation/index.js";
 import { queryPiSpineMode, type PiSpineMode } from "./session-mode.js";
 import {
   childReturnRefusal,
@@ -264,6 +265,7 @@ function activatePiExtension(
     if (slot.mode !== "sdk" || slot.current === null || slot.fault !== null) return;
     slot.treeDisplay.offer(request, slot.generation, slot.current.latestContext.projection);
   });
+  registerSpineTreeNavigation(pi);
   registerLifecycleHandlers(
     pi,
     slot,

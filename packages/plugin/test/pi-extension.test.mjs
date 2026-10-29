@@ -341,7 +341,7 @@ test("default export is a loadable Pi extension with the canonical tools", () =>
     );
   }
   assert.equal(typeof pi.tools.get("spine_spawn").renderCall, "function");
-  assert.deepEqual([...pi.commands.keys()], []);
+  assert.deepEqual([...pi.commands.keys()], ["spine-tree"]);
   assert.ok(pi.handlers.has("context"));
   assert.ok(pi.handlers.has("before_agent_start"));
   assert.ok(pi.handlers.has("session_before_compact"));
