@@ -7,7 +7,7 @@ Install one package; npm installs the SDK and host dependencies automatically:
 pi install npm:@spinejit/pi-spinejit
 ```
 
-Version `0.1.0` is developed and tested against Pi `1.1.0`. The last state developed
+Developed and tested against Pi `1.1.0`. The last state developed
 against Pi 0.87.1 is tagged `pi-0.87-final`.
 
 ## Recommended Pi plugins
