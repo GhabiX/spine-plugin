@@ -1,0 +1,219 @@
+diff --git a/codex-rs/spine-core/src/reducer.rs b/codex-rs/spine-core/src/reducer.rs
+index 7cd9121a56..d571df425a 100644
+--- a/codex-rs/spine-core/src/reducer.rs
++++ b/codex-rs/spine-core/src/reducer.rs
+@@ -355,12 +355,17 @@ impl SpineReducer {
+             parent: Some(parent_id),
+             kind: NodeKind::Task,
+             status: NodeStatus::Live,
+-            summary: Some(summary),
++            summary: Some(summary.clone()),
+             memory: None,
+             start: span.start,
+             end: None,
+             open_input_tokens,
+-            entries: vec![NodeEntry::Leaf(ContextItem::SourceSpan { span })],
++            // The descriptor follows the sampling that opened the node: that
++            // sampling never saw it.
++            entries: vec![
++                NodeEntry::Leaf(ContextItem::SourceSpan { span }),
++                descriptor(&child_id, &summary),
++            ],
+         });
+         self.cursor = child_id;
+     }
+@@ -368,6 +373,7 @@ impl SpineReducer {
+     fn close(&mut self, span: RawSpan, model_memory: String) {
+         let closed_id = self.cursor.clone();
+         let closed_index = self.node_index(&closed_id);
++        self.fold_closing_sampling(closed_index, span);
+         let parent_id = self.nodes[closed_index]
+             .parent
+             .clone()
+@@ -375,12 +381,8 @@ impl SpineReducer {
+         let memory = self.assemble_memory(closed_index, model_memory, span);
+         self.nodes[closed_index].memory = Some(memory);
+         self.nodes[closed_index].status = NodeStatus::Closed;
+-        self.nodes[closed_index].end = Some(span.start);
+         let parent_index = self.node_index(&parent_id);
+         self.nodes[parent_index].status = NodeStatus::Live;
+-        self.nodes[parent_index]
+-            .entries
+-            .push(NodeEntry::Leaf(ContextItem::SourceSpan { span }));
+         self.cursor = parent_id;
+     }
+ 
+@@ -393,6 +395,7 @@ impl SpineReducer {
+     ) {
+         let closed_id = self.cursor.clone();
+         let closed_index = self.node_index(&closed_id);
++        self.fold_closing_sampling(closed_index, span);
+         let parent_id = self.nodes[closed_index]
+             .parent
+             .clone()
+@@ -400,7 +403,6 @@ impl SpineReducer {
+         let memory = self.assemble_memory(closed_index, model_memory, span);
+         self.nodes[closed_index].memory = Some(memory);
+         self.nodes[closed_index].status = NodeStatus::Closed;
+-        self.nodes[closed_index].end = Some(span.start);
+ 
+         let parent_index = self.node_index(&parent_id);
+         let child_ordinal = self.nodes[parent_index].children().count() as u32 + 1;
+@@ -414,16 +416,25 @@ impl SpineReducer {
+             parent: Some(parent_id),
+             kind: NodeKind::Task,
+             status: NodeStatus::Live,
+-            summary: Some(summary),
++            summary: Some(summary.clone()),
+             memory: None,
+-            start: span.start,
++            start: span.end,
+             end: None,
+             open_input_tokens,
+-            entries: vec![NodeEntry::Leaf(ContextItem::SourceSpan { span })],
++            entries: vec![descriptor(&sibling_id, &summary)],
+         });
+         self.cursor = sibling_id;
+     }
+ 
++    /// The sampling that closes a node saw the node's whole history, so it
++    /// belongs to that node and folds with it; only the memory stays visible.
++    fn fold_closing_sampling(&mut self, closed_index: usize, span: RawSpan) {
++        let node = &mut self.nodes[closed_index];
++        node.entries
++            .push(NodeEntry::Leaf(ContextItem::SourceSpan { span }));
++        node.end = Some(span.end);
++    }
++
+     fn spawn(&mut self, span: RawSpan, batches: Vec<Vec<SpawnTask>>) {
+         let parent_id = self.cursor.clone();
+         let parent_index = self.node_index(&parent_id);
+@@ -551,14 +562,7 @@ impl SpineReducer {
+                     .cloned()
+                     .map(ContextItem::MemorySlot),
+             ),
+-            NodeStatus::Live | NodeStatus::Opened => {
+-                context.push(ContextItem::SyntheticNode {
+-                    node_id: node.id.clone(),
+-                    summary: node.summary.clone().unwrap_or_default(),
+-                    status: NodeStatus::Opened,
+-                });
+-                self.render_entries(&node.entries, context);
+-            }
++            NodeStatus::Live | NodeStatus::Opened => self.render_entries(&node.entries, context),
+             NodeStatus::Compacted => {}
+         }
+     }
+@@ -586,6 +590,15 @@ impl SpineReducer {
+     }
+ }
+ 
++/// A task node's descriptor, an entry at the boundary where the node opened.
++fn descriptor(node_id: &NodeId, summary: &str) -> NodeEntry {
++    NodeEntry::Leaf(ContextItem::SyntheticNode {
++        node_id: node_id.clone(),
++        summary: summary.to_string(),
++        status: NodeStatus::Opened,
++    })
++}
++
+ pub(crate) fn display_nodes(nodes: &[NodeId]) -> String {
+     nodes
+         .iter()
+diff --git a/codex-rs/spine-core/tests/recipe_memory_tests.rs b/codex-rs/spine-core/tests/recipe_memory_tests.rs
+index ee99a818a5..a5d53f8ae1 100644
+--- a/codex-rs/spine-core/tests/recipe_memory_tests.rs
++++ b/codex-rs/spine-core/tests/recipe_memory_tests.rs
+@@ -436,6 +436,13 @@ fn close(memory: &str) -> SpineOperationFact {
+     }
+ }
+ 
++fn next(memory: &str, summary: &str) -> SpineOperationFact {
++    SpineOperationFact::Next {
++        closed_memory: memory.to_string(),
++        next_summary: summary.to_string(),
++    }
++}
++
+ /// The assembled memory of a closed node, one label per slot.
+ fn memory_shape(history: &History, id: &[u32]) -> Vec<String> {
+     let id = node(id);
+@@ -474,6 +481,7 @@ fn plan_shape(history: &History) -> Vec<String> {
+                     "projection summary".to_string()
+                 }
+                 ContextItem::MemorySlot(MemorySlot::Reply { .. }) => "projection reply".to_string(),
++                ContextItem::SyntheticNode { node_id, .. } => format!("projection node {node_id}"),
+                 other => format!("projection {other:?}"),
+             },
+         })
+@@ -622,7 +630,8 @@ fn close_keeps_replies_and_drops_other_assistant_text() {
+         vec!["summary", "reply answer to the user", "user follow-up"]
+     );
+     // Kept user messages and replies render their source items; a kept
+-    // reply is labelled so hosts show only its text.
++    // reply is labelled so hosts show only its text. The closing sampling
++    // folds with the node.
+     assert_eq!(
+         plan_shape(&history),
+         vec![
+@@ -630,7 +639,6 @@ fn close_keeps_replies_and_drops_other_assistant_text() {
+             "projection summary",
+             "source [Reply]",
+             "source [UserAnchor(2)]",
+-            "source"
+         ]
+     );
+     history.replay();
+@@ -714,3 +722,52 @@ fn continued_namespace_inherits_unarrived_births_as_context() {
+     history.compact();
+     history.replay();
+ }
++
++#[test]
++fn a_sampled_item_keeps_the_context_it_was_sampled_in() {
++    // Every sampling stays after exactly the context it saw: a descriptor
++    // follows the sampling that opened its node, and the sampling that closes
++    // a node folds with it.
++    let mut history = History::new("sampling-boundary");
++    history.user("outer request");
++    history.step(open("P"));
++    assert_eq!(
++        plan_shape(&history),
++        vec!["source [UserAnchor(1)]", "source", "projection node 1.1"]
++    );
++    history.step(open("Q"));
++    assert_eq!(
++        plan_shape(&history),
++        vec![
++            "source [UserAnchor(1)]",
++            "source",
++            "projection node 1.1",
++            "source",
++            "projection node 1.1.1"
++        ]
++    );
++    history.step(next("Q memory", "R"));
++    assert_eq!(
++        plan_shape(&history),
++        vec![
++            "source [UserAnchor(1)]",
++            "source",
++            "projection node 1.1",
++            "projection summary",
++            "projection node 1.1.2"
++        ]
++    );
++    history.step(close("R memory"));
++    history.step(close("P memory"));
++    // P's memory: its own summary, then Q's and R's.
++    assert_eq!(
++        plan_shape(&history),
++        vec![
++            "source [UserAnchor(1)]",
++            "projection summary",
++            "projection summary",
++            "projection summary"
++        ]
++    );
++    history.replay();
++}

@@ -1,0 +1,15 @@
+diff --git a/packages/plugin/test/pi-extension.test.mjs b/packages/plugin/test/pi-extension.test.mjs
+index f03de9e..f975438 100644
+--- a/packages/plugin/test/pi-extension.test.mjs
++++ b/packages/plugin/test/pi-extension.test.mjs
+@@ -1318,7 +1318,9 @@ test("WASM-backed extension completes one Pi Open sampling transaction", async (
+   assert.equal(pi.entries[0].data.record.type, "sampling_started");
+   assert.equal(pi.entries[1].data.record.type, "sampling_commit");
+   const after = await pi.emit("context", { type: "context", messages: [] }, ctx.context);
+-  assert.match(after.messages[1].content, /<spine_node id="1\.1" summary="inspect" status="opened">/);
++  // The descriptor follows the sampling that opened the node: call, result, descriptor.
++  assert.deepEqual(after.messages.slice(1).map((message) => message.role), ["assistant", "toolResult", "custom"]);
++  assert.match(after.messages[3].content, /<spine_node id="1\.1" summary="inspect" status="opened">/);
+   assert.equal(ctx.aborts, 0);
+ 
+   const compact = await pi.emit(
