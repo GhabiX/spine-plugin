@@ -1,0 +1,18 @@
+# @spinejit/dsh-spinejit bundle patch. Spine owns the model context, so the
+# plugins that rewrite it are switched off, then the spinejit row is added.
+- id: compaction-basic
+  disabled: true
+
+# /compact follows the compaction service switched off above.
+- id: command-compact
+  disabled: true
+
+- id: tool-result-pruner
+  disabled: true
+
+- id: image-offload
+  disabled: true
+
+- insert:
+    - id: spinejit
+      name: '@spinejit/dsh-spinejit'

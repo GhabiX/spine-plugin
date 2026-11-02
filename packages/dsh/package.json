@@ -15,7 +15,11 @@
   },
   "homepage": "https://github.com/GhabiX/spine-plugin#readme",
   "keywords": [
-    "spinejit"
+    "dsh-plugin",
+    "deepseek-harness",
+    "dsh",
+    "spinejit",
+    "context-management"
   ],
   "exports": {
     ".": {
@@ -23,15 +27,22 @@
       "import": "./dist/index.js"
     }
   },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
   "files": [
     "README.md",
+    "cordis.patch.yml",
     "dist"
   ],
   "publishConfig": {
     "access": "public"
   },
   "engines": {
-    "node": ">=22.19.0"
+    "node": ">=22.19.0",
+    "dsh": ">=0.2.1-rc.2 <0.3.0-0"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
