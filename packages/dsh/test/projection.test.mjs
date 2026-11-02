@@ -7,7 +7,7 @@ const source = (seq) => ({ seq, role: "source", text: null });
 const host = (seq) => ({ seq, role: "host", text: null });
 const slot = (seq) => ({ seq, role: "spine", text: null });
 const spine = (seq, text) => ({ seq, role: "spine", text });
-const at = (seq, anchor = null) => ({ type: "source", seq, anchor });
+const at = (seq, anchor = null) => ({ type: "source", seq, anchor, withoutReasoning: false });
 const item = (text) => ({ type: "spine", text });
 
 /** What the log looks like after the edits; new events take seqs from 100. */

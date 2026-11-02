@@ -21,7 +21,8 @@ export class ScriptedAdapter extends LlmAdapter {
   /**
    * @param replies one per request, or an object of such lists by session id
    *   when several sessions run: a string is text, an array is tool calls
-   *   `[name, input]`, `{ text, finish }` is text that ends with that finish
+   *   `[name, input]`, `{ reasoning, calls }` is those calls after a reasoning
+   *   block, `{ text, finish }` is text that ends with that finish
    *   kind (null: the stream ends without a finish chunk), `{ fail }` throws that message, `{ hang: true }` waits for the
    *   request to be aborted, and a function of the request returns the reply.
    */
@@ -44,14 +45,16 @@ export class ScriptedAdapter extends LlmAdapter {
       throw request.signal.reason;
     }
     const text = typeof reply === "string" ? reply : reply.text;
+    const calls = reply.calls ?? reply;
     const blocks = text !== undefined
       ? [{ type: "text", text }]
-      : reply.map(([name, input], index) => ({
+      : calls.map(([name, input], index) => ({
         type: "tool-call",
         id: `call-${this.requests.length}-${index}`,
         name,
         arguments: JSON.stringify(input),
       }));
+    if (reply.reasoning !== undefined) blocks.unshift({ type: "reasoning", text: reply.reasoning });
     for (const [index, block] of blocks.entries()) {
       yield { type: "block-start", index, blockType: block.type };
       yield { type: "block-end", index, block };
@@ -120,15 +123,19 @@ export async function mountDsh(replies, { plugin = true, root } = {}) {
       agent.followup(createUserMessage({ content: [{ type: "text", text }], source: { kind: "user" } }));
       await agent.whenIdle();
     },
-    /** The model context DSH restores from the official JSONL log, without any plugin; a session id names a disposed one. */
+    /**
+     * The model context DSH restores from the official JSONL log, with no plugin
+     * but the message projections registered (Spine's drops reasoning); a
+     * session id names a disposed one.
+     */
     async restored(agent) {
       if (typeof agent !== "string") await ctx.sessions.flush(agent.session);
       const id = typeof agent === "string" ? agent : agent.id;
       const handle = await ctx.sessionPersistence.open(id, "read");
       try {
         const data = await handle.read();
-        return Session.fromRestore(id, data.events, handle.header, handle.inheritedEventCount, data.eventState)
-          .deriveMessages();
+        return Session.fromRestore(id, data.events, handle.header, handle.inheritedEventCount, data.eventState,
+          ctx.sessions.messageProjections).deriveMessages();
       } finally {
         await handle.close();
       }

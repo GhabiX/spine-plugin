@@ -8,6 +8,7 @@ import { createNodeSpineRuntime, type SpineToolSpec } from "@spinejit/spine-sdk/
 
 import { SPINE_FEATURES, SpineAgent } from "./agent.js";
 import { arrivalMessage, SpineDshError } from "./events.js";
+import { withoutReasoningProjection } from "./reasoning.js";
 import { executeChild, recoverChildren, returnTool, spineSubagentProvider, type SpineWorld } from "./spawn.js";
 
 /** The Cordis plugin DeepSeek Harness loads, by package name, from a bundle. */
@@ -29,6 +30,7 @@ export function apply(ctx: Context): void {
   const agents = new Map<string, SpineAgent>();
   const children = new Map<string, SpawnChildren>();
   const world: SpineWorld = { ctx, agents, children, idle: new Map(), starting: new Map() };
+  ctx.sessions.registerMessageProjection(withoutReasoningProjection);
   ctx.subagents.registerProvider(spineSubagentProvider(world.starting));
   ctx.systemPrompt.section({ name: "spinejit", order: ctx.systemPrompt.getSectionOrder("TOOLS_SDK"), text: prompt });
   for (const tool of tools) ctx.tools.register(spineTool(tool, agents));

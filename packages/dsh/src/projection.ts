@@ -15,8 +15,11 @@ import { emptySlot, SpineDshError, spineMessage, type SurfaceRole } from "./even
 
 /** One model-visible item of a Spine plan in DSH terms. */
 export type PlanItem =
-  /** A logged source event shown as it is; `anchor` is its `[U<n>]`, if any. */
-  | { type: "source"; seq: SessionSeq; anchor: number | null }
+  /**
+   * A logged source event shown as it is; `anchor` is its `[U<n>]`, if any;
+   * `withoutReasoning`, a model output shown without its reasoning.
+   */
+  | { type: "source"; seq: SessionSeq; anchor: number | null; withoutReasoning: boolean }
   /** Text this plugin writes as a user message. */
   | { type: "spine"; text: string };
 
@@ -48,9 +51,14 @@ function planItem(
   nodePrompt: string,
 ): PlanItem {
   if (cell.type === "source") {
-    const anchors = cell.labels.flatMap((label) => (label === "Reply" ? [] : [label.UserAnchor]));
+    const anchors = cell.labels.flatMap((label) => (label === "WithoutReasoning" ? [] : [label.UserAnchor]));
     if (anchors.length > 1) throw new SpineDshError(`source ${seqOf(cell.source_id)} has ${anchors.length} user anchors`);
-    return { type: "source", seq: seqOf(cell.source_id), anchor: anchors[0] ?? null };
+    return {
+      type: "source",
+      seq: seqOf(cell.source_id),
+      anchor: anchors[0] ?? null,
+      withoutReasoning: cell.labels.includes("WithoutReasoning"),
+    };
   }
   const item = cell.item;
   if ("SyntheticNode" in item) {

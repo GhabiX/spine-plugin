@@ -30,6 +30,7 @@ import {
   surfaceRole,
 } from "./events.js";
 import { applySurfaceEdits, planItems, surfaceEdits, type PlanItem, type SurfaceNode } from "./projection.js";
+import { dropReasoning, hasReasoning } from "./reasoning.js";
 
 export const SPINE_FEATURES: FeatureFlag[] = ["jit", "spawn"];
 
@@ -179,6 +180,8 @@ export class SpineAgent {
     await this.#guard(async () => {
       if (this.#plan === null) return;
       applySurfaceEdits(this.agent.session, surfaceEdits(this.#surface(), this.#plan), turn, step);
+      dropReasoning(this.agent.session, this.#plan.flatMap((item) =>
+        item.type === "source" && item.withoutReasoning ? [item.seq] : []));
     });
   }
 
@@ -212,7 +215,7 @@ export class SpineAgent {
     if (sampling === null) throw new SpineDshError(`${name} ran outside a Spine sampling`);
     if (sampling.called !== null) throw new SpineToolLimitError(sampling.called);
     // What the core would refuse at commit is a tool error now, not a fault later.
-    const refusal = spineToolRefusal(this.#projection!, name, this.#entered);
+    const refusal = spineToolRefusal(this.#projection!, name, this.#entered, this.#responseCalls(sampling.from));
     if (refusal !== null) throw new SpineDshError(refusal);
     sampling.called = name;
   }
@@ -320,6 +323,17 @@ export class SpineAgent {
     return events.length;
   }
 
+  /** Tool calls in the model response logged since `from`, the sampling's start. */
+  #responseCalls(from: number): number {
+    for (let seq = this.agent.session.seq - 1; seq >= from; seq -= 1) {
+      const event = this.#events.get(seq);
+      if (event?.type === "assistant/message") {
+        return event.data.message.content.filter((block) => block.type === "tool-call").length;
+      }
+    }
+    return 1;
+  }
+
   #seqOf(id: EpochOrdinalId): SessionSeq {
     const seq = this.#sourceSeqs.get(sourceKey(id));
     if (seq === undefined) throw new SpineDshError(`Spine plan names unknown source ${sourceKey(id)}`);
@@ -342,7 +356,14 @@ export class SpineAgent {
       throw new SpineDshError(`the model request differs from the Spine plan by ${edits.length} surface edits`);
     }
     for (const item of plan) {
-      if (item.type !== "source" || item.anchor === null) continue;
+      if (item.type !== "source") continue;
+      if (item.withoutReasoning) {
+        const shown = this.agent.session.deriveEventMessage(this.#event(item.seq));
+        if (shown !== null && hasReasoning(shown)) {
+          throw new SpineDshError(`source ${item.seq} still shows its reasoning, which the Spine plan leaves out`);
+        }
+      }
+      if (item.anchor === null) continue;
       const logged = anchorOf(eventMessage(this.#event(item.seq)));
       if (logged !== item.anchor) {
         throw new SpineDshError(`source ${item.seq} is U${item.anchor} in the Spine plan but logged as U${logged}`);

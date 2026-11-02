@@ -261,6 +261,8 @@ export function materializePiContext(
 
   const messages: PiAgentMessage[] = [];
   const projectedIndex = new Map<string, number>();
+  // Tool call ids withoutReasoning rewrote, so their results follow.
+  const renamedCalls = new Map<string, string>();
   for (const cell of plan.cells) {
     if (cell.type === "source") {
       const entryId = bindings.entryId(cell.source_id);
@@ -276,7 +278,12 @@ export function materializePiContext(
         message = bindings.resolve(cell.source_id);
       }
       for (const label of cell.labels) {
-        message = label === "Reply" ? replyText(message) : prependUserAnchor(message, label.UserAnchor);
+        message = label === "WithoutReasoning"
+          ? withoutReasoning(message, renamedCalls)
+          : prependUserAnchor(message, label.UserAnchor);
+      }
+      if (message.role === "toolResult" && renamedCalls.has(message.toolCallId)) {
+        message = { ...message, toolCallId: renamedCalls.get(message.toolCallId)! };
       }
       messages.push(message);
       continue;
@@ -356,13 +363,31 @@ function unsupportedProjection(item: ContextItem): PiContextMaterializationError
   );
 }
 
-/** A kept reply shows only what the agent wrote to the user. */
-function replyText(message: PiAgentMessage): PiAgentMessage {
+/**
+ * A model output that now follows another prefix keeps its text and tool
+ * calls and loses its reasoning: thinking blocks (redacted ones too), and the
+ * signatures tied to the context it was sampled in. In Pi those are
+ * `textSignature`, `thoughtSignature` and, for OpenAI Responses, the item id
+ * after `|` in a tool call id, which pairs the call with its reasoning item;
+ * the call keeps its call id, and its result is renamed to match.
+ */
+function withoutReasoning(message: PiAgentMessage, renamedCalls: Map<string, string>): PiAgentMessage {
   if (message.role !== "assistant") {
-    throw new PiContextMaterializationError(`Spine reply label targets a ${message.role} message`);
+    throw new PiContextMaterializationError(`Spine WithoutReasoning label targets a ${message.role} message`);
   }
   const copy = structuredClone(message);
-  copy.content = copy.content.filter((part) => part.type === "text");
+  copy.content = copy.content.flatMap((part) => {
+    if (part.type === "thinking") return [];
+    const bare = { ...part } as Record<string, unknown>;
+    delete bare.textSignature;
+    delete bare.thoughtSignature;
+    if (part.type === "toolCall" && part.id.includes("|")) {
+      const callId = part.id.slice(0, part.id.indexOf("|"));
+      renamedCalls.set(part.id, callId);
+      bare.id = callId;
+    }
+    return [bare as unknown as typeof part];
+  });
   return copy;
 }
 

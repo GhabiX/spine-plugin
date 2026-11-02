@@ -41,6 +41,8 @@ export function spineToolRefusal(
   projection: SpineProjection,
   name: SpineToolName,
   entered: ReadonlySet<string>,
+  /** Tool calls in the model response that made this one, itself included. */
+  responseCalls = 1,
 ): string | null {
   if (name !== "spine_close" && name !== "spine_next") return null;
   const cursor = projection.nodes.find((node) =>
@@ -50,8 +52,14 @@ export function spineToolRefusal(
   if (cursor === undefined) return "Spine cursor is missing from the derived tree";
   if (cursor.kind === "RootEpoch") return "no open Spine node is available to close";
   const pending = unarrivedBirths(projection, projection.cursor).filter((birth) => !entered.has(birth.producer.join(".")));
-  if (pending.length === 0) return null;
-  return `Spawned children ${formatBirths(pending)} have not arrived. Each result arrives as its own message; close this node after they have arrived.`;
+  if (pending.length > 0) {
+    return `Spawned children ${formatBirths(pending)} have not arrived. Each result arrives as its own message; close this node after they have arrived.`;
+  }
+  // The closing sampling folds with the node, so results beside it would be lost.
+  if (name === "spine_close" && responseCalls > 1) {
+    return "spine_close must be the only tool call in its response: the node folds into its memory with this step, so the other calls' results would not be shown. Call spine_close again on its own.";
+  }
+  return null;
 }
 
 /** Why a Spawn child may not return its memory yet, or null: its own children come first. */

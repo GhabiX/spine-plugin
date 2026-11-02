@@ -115,7 +115,8 @@ export type MemorySlot =
 
 export type ContextItem =
   | { Message: { message: Message; user_anchor: SafeInteger | null } }
-  | { SourceSpan: { span: RawSpan } }
+  /** `without_reasoning`: the sampling closed a node; its model output is labelled `WithoutReasoning`. */
+  | { SourceSpan: { span: RawSpan; without_reasoning?: boolean } }
   | {
       SyntheticNode: {
         node_id: SafeInteger[];
@@ -193,8 +194,13 @@ export type SamplingArchiveRecord =
   | { type: "sampling_started"; record: SamplingStarted }
   | { type: "sampling_commit"; record: SamplingCommit };
 
-/** `Reply`: the source stands as a kept reply; show only its text. */
-export type ContextLabel = { UserAnchor: SafeInteger } | "Reply";
+/**
+ * `WithoutReasoning`: the model output now follows a prefix other than the
+ * one it was sampled after (a kept reply, a sampling that closed a node).
+ * Keep what it said and called; leave out its reasoning, the thinking and
+ * the signatures bound to the old prefix.
+ */
+export type ContextLabel = { UserAnchor: SafeInteger } | "WithoutReasoning";
 
 export type ContextPlanCell =
   | {

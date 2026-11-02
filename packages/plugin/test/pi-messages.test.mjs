@@ -151,7 +151,7 @@ test("Pi renders only the canonical Spine-owned projection forms", () => {
   assert.equal(provider[0].content[0].text, messages[0].content);
 });
 
-test("Pi shows a kept reply as its text blocks only", () => {
+test("Pi shows a kept reply without its reasoning", () => {
   const bindings = new PiSourceBindings();
   const reply = {
     role: "assistant",
@@ -172,7 +172,7 @@ test("Pi shows a kept reply as its text blocks only", () => {
       thread: "pi-session",
       epoch: 0,
       source_snapshot_digest: "source",
-      cells: [{ type: "source", source_id: SOURCE_ID, labels: ["Reply"] }],
+      cells: [{ type: "source", source_id: SOURCE_ID, labels: ["WithoutReasoning"] }],
       plan_digest: "plan",
     },
     projection: { nodes: [], cursor: [], visible_context: [], last_boundary: null },
@@ -180,9 +180,61 @@ test("Pi shows a kept reply as its text blocks only", () => {
 
   assert.deepEqual(messages, [{
     ...reply,
-    content: [{ type: "text", text: "first part", textSignature: "text-sig" }, { type: "text", text: "second part" }],
+    content: [{ type: "text", text: "first part" }, { type: "text", text: "second part" }],
   }]);
   assert.equal(reply.content.length, 4);
+});
+
+test("Pi shows a sampling that closed a node without its reasoning, calls and results kept", () => {
+  const bindings = new PiSourceBindings();
+  const source = (ordinal) => ({ thread: "pi-session", epoch: 0, ordinal });
+  const closing = {
+    role: "assistant",
+    content: [
+      { type: "thinking", thinking: "why close", thinkingSignature: "think-sig" },
+      { type: "text", text: "closing", textSignature: "text-sig" },
+      { type: "toolCall", id: "call_1|fc_1", name: "spine_close", arguments: { memory: "m" }, thoughtSignature: "call-sig" },
+      { type: "toolCall", id: "toolu_2", name: "read", arguments: { path: "a" }, thoughtSignature: "call-sig-2" },
+    ],
+    stopReason: "toolUse",
+    timestamp: 1,
+  };
+  const result1 = { role: "toolResult", toolCallId: "call_1|fc_1", toolName: "spine_close", content: [{ type: "text", text: "ok" }], isError: false, timestamp: 2 };
+  const result2 = { role: "toolResult", toolCallId: "toolu_2", toolName: "read", content: [{ type: "text", text: "a" }], isError: false, timestamp: 3 };
+  bindings.bind(source(0), closing, "closing");
+  bindings.bind(source(1), result1, "result1");
+  bindings.bind(source(2), result2, "result2");
+  const messages = materializePiContext({
+    transactionId: "preview:plan",
+    contextPlan: {
+      schema: "spine.context.plan.v2",
+      thread: "pi-session",
+      epoch: 0,
+      source_snapshot_digest: "source",
+      cells: [
+        { type: "source", source_id: source(0), labels: ["WithoutReasoning"] },
+        { type: "source", source_id: source(1), labels: [] },
+        { type: "source", source_id: source(2), labels: [] },
+      ],
+      plan_digest: "plan",
+    },
+    projection: { nodes: [], cursor: [], visible_context: [], last_boundary: null },
+  }, bindings);
+
+  assert.deepEqual(messages, [
+    {
+      ...closing,
+      content: [
+        { type: "text", text: "closing" },
+        { type: "toolCall", id: "call_1", name: "spine_close", arguments: { memory: "m" } },
+        { type: "toolCall", id: "toolu_2", name: "read", arguments: { path: "a" } },
+      ],
+    },
+    { ...result1, toolCallId: "call_1" },
+    result2,
+  ]);
+  assert.equal(closing.content.length, 4);
+  assert.equal(closing.content[2].id, "call_1|fc_1");
 });
 
 test("Pi materialization applies an entry projection without matching message text", () => {
