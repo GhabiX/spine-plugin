@@ -688,7 +688,7 @@ function registerLifecycleHandlers(
       return { cancel: true };
     }
     let summaryResult: { summary: string; usage?: CompactionResult["usage"] };
-    let retained: { messages: PiAgentMessage[]; entryIds: (string | null)[] };
+    let retained: ReturnType<typeof retainedPiMessages>;
     try {
       summaryResult = await summarizePiCompaction(slot, session, event, ctx);
       if (event.signal?.aborted === true) {
@@ -731,11 +731,12 @@ function registerLifecycleHandlers(
         onAbort();
         return { cancel: true };
       }
-      const compaction: CompactionResult = {
+      // Without a kept entry Pi records the compaction itself as the first kept entry: nothing before it is kept.
+      const compaction = {
         summary: summaryResult.summary,
-        firstKeptEntryId: event.preparation.firstKeptEntryId,
+        firstKeptEntryId: retained.firstKeptEntryId,
         tokensBefore: event.preparation.tokensBefore,
-      };
+      } as CompactionResult;
       if (summaryResult.usage !== undefined) compaction.usage = summaryResult.usage;
       return {
         compaction,
@@ -847,24 +848,51 @@ function piNativeSummaryMaxTokens(reserveTokens: number, modelMaxTokens: number)
   );
 }
 
+/**
+ * The raw messages a Spine compaction keeps after its summary. The summary covers the whole
+ * model context, so a finished turn keeps nothing; an unfinished turn (tool calls running, a
+ * failed response Pi retries) keeps its own messages from where it began, never earlier
+ * than Pi's kept range, so the turn can go on. Older raw history would bring back nodes
+ * that closed and folded.
+ */
 function retainedPiMessages(
-  event: { branchEntries: readonly SessionEntry[]; preparation: { firstKeptEntryId: string } },
-): { messages: PiAgentMessage[]; entryIds: (string | null)[] } {
+  event: {
+    branchEntries: readonly SessionEntry[];
+    preparation: { firstKeptEntryId: string };
+    willRetry?: boolean;
+  },
+): { messages: PiAgentMessage[]; entryIds: (string | null)[]; firstKeptEntryId: string | undefined } {
   const projection = buildSessionProjection([...event.branchEntries]);
-  const start = projection.entries.findIndex(
-    (entry) => entry.sourceEntry.id === event.preparation.firstKeptEntryId,
-  );
-  if (start < 0) throw new Error("Pi compaction first-kept entry is missing from the active branch");
+  const entries = projection.entries.map((entry) => ({
+    id: entry.sourceEntry.id,
+    messages: entry.messages.filter((message) => !isPiHostSystemMessage(message)) as PiAgentMessage[],
+  }));
+  const kept = entries.findIndex((entry) => entry.id === event.preparation.firstKeptEntryId);
+  if (kept < 0) throw new Error("Pi compaction first-kept entry is missing from the active branch");
+  const none = { messages: [], entryIds: [], firstKeptEntryId: undefined };
+  const last = entries.flatMap((entry) => entry.messages).at(-1);
+  if (last === undefined || (event.willRetry !== true && finishedTurn(last))) return none;
+  let turn = 0;
+  entries.forEach((entry, index) => {
+    if (entry.messages.some((message) => message.role === "user")) turn = index;
+  });
+  const start = Math.max(kept, turn);
   const messages: PiAgentMessage[] = [];
   const entryIds: (string | null)[] = [];
-  for (const entry of projection.entries.slice(start)) {
+  for (const entry of entries.slice(start)) {
     for (const message of entry.messages) {
-      if (isPiHostSystemMessage(message)) continue;
-      messages.push(message as PiAgentMessage);
-      entryIds.push(entry.sourceEntry.id);
+      messages.push(message);
+      entryIds.push(entry.id);
     }
   }
-  return { messages, entryIds };
+  return { messages, entryIds, firstKeptEntryId: entries[start]?.id };
+}
+
+function finishedTurn(message: PiAgentMessage): boolean {
+  if (message.role !== "assistant") return false;
+  const reply = message as { stopReason?: string; content?: unknown };
+  if (reply.stopReason === "error" || reply.stopReason === "toolUse") return false;
+  return !(Array.isArray(reply.content) && reply.content.some((part) => (part as { type?: string }).type === "toolCall"));
 }
 
 function projectedPiMessages(branch: readonly PiBranchEntry[]): Map<string, PiAgentMessage[]> {

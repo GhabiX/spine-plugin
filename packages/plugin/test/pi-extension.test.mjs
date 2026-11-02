@@ -1783,9 +1783,94 @@ test("Pi compact tail uses the host projection for omissions and rewrites", asyn
   const rendered = JSON.stringify(compact.data.replacementMessages);
   assert.equal(rendered.includes("OMITTED"), false);
   assert.equal(rendered.includes("old-text"), false);
-  assert.equal(rendered.includes("keep-user"), true);
   assert.equal(rendered.includes("new-text"), true);
-  assert.deepEqual(compact.data.replacementEntryIds, [null, "keep", "rewrite"]);
+  assert.deepEqual(compact.data.replacementEntryIds, [null, "rewrite"]);
+});
+
+async function compactAfter(entries, firstKeptEntryId, extra = {}) {
+  const pi = mockPi();
+  const ctx = extensionContext();
+  ctx.context.model = { provider: "test", id: "test-model" };
+  ctx.context.modelRegistry = {
+    async complete() {
+      return { content: [{ type: "text", text: "whole summary" }] };
+    },
+  };
+  ctx.context.sessionManager.getBranch = () => entries;
+  createPiExtension()(pi.api);
+  await pi.emit("session_start", { type: "session_start", reason: "new" }, ctx.context);
+  const result = await pi.emit(
+    "session_before_compact",
+    {
+      type: "session_before_compact",
+      preparation: {
+        firstKeptEntryId,
+        messagesToSummarize: [],
+        turnPrefixMessages: [],
+        tokensBefore: 12,
+        settings: { enabled: true, reserveTokens: 16384, keepRecentTokens: 20000 },
+      },
+      branchEntries: entries,
+      signal: new AbortController().signal,
+      reason: "manual",
+      willRetry: false,
+      ...extra,
+    },
+    ctx.context,
+  );
+  const compact = pi.entries.find((entry) => entry.customType === "spine.compact.v1");
+  return { result, compact, rendered: JSON.stringify(compact.data.replacementMessages) };
+}
+
+function chain(...messages) {
+  return messages.map(([id, message], index) => ({
+    type: "message",
+    id,
+    parentId: index === 0 ? null : messages[index - 1][0],
+    timestamp: String(index + 1),
+    message,
+  }));
+}
+
+test("Spine compaction after a finished turn keeps only its summary", async () => {
+  const entries = chain(
+    ["u1", user("first task")],
+    ["a1", assistant([{ type: "text", text: "RAW-EARLIER answer" }])],
+    ["u2", user("second task")],
+    ["a2", assistant([{ type: "text", text: "RAW-LAST answer" }])],
+  );
+  const { result, compact, rendered } = await compactAfter(entries, "a1");
+  assert.equal(result.compaction.summary, "whole summary");
+  assert.equal(result.compaction.firstKeptEntryId, undefined);
+  assert.equal(compact.data.replacementMessages.length, 1);
+  assert.equal(rendered.includes("RAW-"), false);
+  assert.deepEqual(compact.data.replacementEntryIds, [null]);
+});
+
+test("Spine compaction inside an unfinished turn keeps that turn and nothing earlier", async () => {
+  const entries = chain(
+    ["u1", user("first task")],
+    ["a1", assistant([{ type: "text", text: "RAW-EARLIER answer" }])],
+    ["u2", user("second task")],
+    ["a2", assistant([{ type: "toolCall", id: "c1", name: "read", arguments: { path: "x" } }], "toolUse")],
+    ["r2", { role: "toolResult", toolCallId: "c1", toolName: "read", content: [{ type: "text", text: "file x" }], isError: false, timestamp: 1 }],
+  );
+  const { result, compact, rendered } = await compactAfter(entries, "u1", { reason: "threshold" });
+  assert.equal(result.compaction.firstKeptEntryId, "u2");
+  assert.equal(rendered.includes("RAW-EARLIER"), false);
+  assert.equal(rendered.includes("second task"), true);
+  assert.deepEqual(compact.data.replacementEntryIds, [null, "u2", "a2", "r2"]);
+});
+
+test("Spine compaction before a retried response keeps the turn being retried", async () => {
+  const entries = chain(
+    ["u1", user("first task")],
+    ["a1", assistant([{ type: "text", text: "RAW-EARLIER answer" }])],
+    ["u2", user("second task")],
+  );
+  const { result, compact } = await compactAfter(entries, "a1", { reason: "overflow", willRetry: true });
+  assert.equal(result.compaction.firstKeptEntryId, "u2");
+  assert.deepEqual(compact.data.replacementEntryIds, [null, "u2"]);
 });
 
 test("Pi compact abort after Spine completion faults the live session", async () => {
