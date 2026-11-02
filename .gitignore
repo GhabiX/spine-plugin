@@ -2,3 +2,13 @@
 /node_modules/
 /packages/*/dist/
 *.tsbuildinfo
+
+# archive: raw run artifacts (installed runtimes, logs, builds) stay local;
+# the write-ups next to them are tracked
+/archive/**/__pycache__/
+/archive/sdk_review_branch_e2e_20260928_1232/blackboard/
+/archive/sdk_review_branch_e2e_20260928_1232/runtime*/
+/archive/sdk_review_branch_e2e_20260928_1232/evidence/
+/archive/pi_spinejit_rename_20261008_1722/evidence/
+/archive/pi_spinejit_rename_20261008_1722/validation/
+/archive/spinetree_plugin_20261027/spinetree-plugin/dist/
