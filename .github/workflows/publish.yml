@@ -12,6 +12,7 @@ on:
           - plugin
           - sdk
           - host
+          - dsh
 
 permissions:
   contents: read
