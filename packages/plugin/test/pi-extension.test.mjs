@@ -433,6 +433,36 @@ test("child mode keeps ordinary tools, Spine tree tools, nested spawn, and typed
   ]);
 });
 
+test("before_agent_start extends a prompt an earlier extension already replaced", async () => {
+  const pi = mockPi();
+  const ctx = extensionContext();
+  createPiExtension()(pi.api);
+  await pi.emit("session_start", { type: "session_start", reason: "new" }, ctx.context);
+  const event = {
+    type: "before_agent_start",
+    prompt: "Implement the task",
+    systemPrompt: "prompt replaced by another extension",
+    systemPromptOptions: { forceSystemPrompt: "prompt replaced by another extension" },
+  };
+  const result = await pi.emit("before_agent_start", event, ctx.context);
+  const expectedRuntime = createNodeSpineRuntime({
+    thread: "pi-session",
+    features: ["jit", "spawn"],
+    configToml: loadSpineConfigToml(),
+  });
+  try {
+    assert.equal(
+      result?.systemPrompt,
+      expectedRuntime.extendSystemPrompt("prompt replaced by another extension"),
+    );
+    assert.match(result.systemPrompt, /^prompt replaced by another extension/);
+    assert.match(result.systemPrompt, /spine_instruction/);
+    assert.equal(event.systemPromptOptions.appendSystemPrompt, undefined);
+  } finally {
+    expectedRuntime.dispose();
+  }
+});
+
 test("child mode installs Spine lifecycle so descendant open/close/next can run", async () => {
   const pi = mockPi();
   pi.setChildFlag(true);

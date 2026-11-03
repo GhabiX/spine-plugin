@@ -565,10 +565,15 @@ function registerLifecycleHandlers(
     if (slot.mode !== "sdk") return;
     const session = await requireSession(slot);
     await observePersistedPiSources(session, ctx);
-    if (event.systemPromptOptions === undefined) return;
-    event.systemPromptOptions.appendSystemPrompt = session.runtime.extendSystemPrompt(
-      event.systemPromptOptions.appendSystemPrompt ?? "",
-    );
+    const options = event.systemPromptOptions;
+    if (options === undefined) return;
+    // An earlier handler that returned { systemPrompt } makes Pi send that text
+    // as the whole prompt and ignore appendSystemPrompt, so extend it instead.
+    if (options.forceSystemPrompt !== undefined) {
+      return { systemPrompt: session.runtime.extendSystemPrompt(event.systemPrompt) };
+    }
+    options.appendSystemPrompt = session.runtime.extendSystemPrompt(options.appendSystemPrompt ?? "");
+    return undefined;
   });
   pi.on("tool_call", async (event, ctx) => {
     if (slot.mode !== "sdk") return;
