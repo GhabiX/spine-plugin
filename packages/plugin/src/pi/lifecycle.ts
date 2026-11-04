@@ -55,8 +55,6 @@ export class PiSamplingLifecycle {
   #previewInFlight: Promise<void> | null = null;
   #samplingActive = false;
   #staged: SpineToolName | null = null;
-  /** Tool calls in the current sampling's model response. */
-  #responseCalls = 0;
   #fault: unknown = null;
 
   constructor(
@@ -75,16 +73,8 @@ export class PiSamplingLifecycle {
     return this.#fault ?? this.#adapter.fault;
   }
 
-  /** Tool calls in the current sampling's model response, so far. */
-  get responseCalls(): number {
-    return this.#responseCalls;
-  }
-
   async observeMessage(message: PiAgentMessage): Promise<void> {
     if (isPiHostSystemMessage(message)) return;
-    if (message.role === "assistant" && this.#samplingActive) {
-      this.#responseCalls = message.content.filter((part) => part.type === "toolCall").length;
-    }
     await this.#guard(async () => {
       const observation = sourceObservation(message, this.#nextBoundary);
       const sourceIds = await this.#adapter.observeSources([observation.character]);
@@ -201,7 +191,6 @@ export class PiSamplingLifecycle {
       this.#samplingActive = true;
       this.#executions.clear();
       this.#staged = null;
-      this.#responseCalls = 0;
     });
   }
 

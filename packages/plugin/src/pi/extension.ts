@@ -1152,7 +1152,6 @@ function controlToolAdmission(
     slot.current.latestContext.projection,
     toolName as (typeof CONTROL_TOOLS)[number],
     enteredArrivals(ctx),
-    slot.current.lifecycle.responseCalls,
   );
   return reason === null ? undefined : { block: true, reason };
 }

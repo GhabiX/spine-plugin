@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { mountDsh } from "./harness.mjs";
-import { call, memory, node, shown, staged } from "./shown.mjs";
+import { call, closing, memory, node, shown, staged } from "./shown.mjs";
 
 /** Run `before` in one world, then resume the same session in a new one and run `after`. */
 async function restart(before, after, drive) {
@@ -38,7 +38,7 @@ test("a resumed session keeps its open node, user numbering and Close", async ()
   assert.deepEqual(run.ends, ["completed", "completed"]);
   assert.deepEqual(run.requests, [
     ["user: [U1]\nstart", "context: …", call("spine_open", { goal: "A" }), staged("spine_open"), node("1.1", "A"), "assistant: replyA", "user: [U2]\nmore"],
-    ["user: [U1]\nstart", "context: …", memory("1.1", "memA"), "assistant: replyA", "user: [U2]\nmore"],
+    ["user: [U1]\nstart", "context: …", "assistant: replyA", "user: [U2]\nmore", ...closing("1.1", "memA")],
   ]);
 });
 
@@ -157,7 +157,7 @@ test("a stream that ends without a finish chunk stopped by itself: its reply sur
   ]);
   assert.deepEqual(restarted, continuous);
   assert.deepEqual(continuous.requests.at(-1), [
-    "user: [U1]\nstart", "context: …", memory("1.1", "mA"), "assistant: replyA", "user: [U2]\nmore",
+    "user: [U1]\nstart", "context: …", "assistant: replyA", "user: [U2]\nmore", ...closing("1.1", "mA"),
   ]);
 });
 

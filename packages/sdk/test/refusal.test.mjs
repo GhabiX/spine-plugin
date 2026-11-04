@@ -12,13 +12,7 @@ const projection = (cursor) => ({
   cursor, visible_context: [], last_boundary: null,
 });
 
-test("spine_close beside other tool calls is refused; alone it is admitted", () => {
-  const open = projection([1, 1]);
-  assert.match(spineToolRefusal(open, "spine_close", new Set(), 2), /spine_close must be the only tool call/);
-  assert.equal(spineToolRefusal(open, "spine_close", new Set(), 1), null);
-  assert.equal(spineToolRefusal(open, "spine_close", new Set()), null);
-  // Next keeps its sampling, so the results beside it stay: no refusal.
-  assert.equal(spineToolRefusal(open, "spine_next", new Set(), 2), null);
-  // Closing at the root is refused for that reason first.
-  assert.match(spineToolRefusal(projection([1]), "spine_close", new Set(), 2), /no open Spine node/);
+test("spine_close is admitted at an open node and refused at the root", () => {
+  assert.equal(spineToolRefusal(projection([1, 1]), "spine_close", new Set()), null);
+  assert.match(spineToolRefusal(projection([1]), "spine_close", new Set()), /no open Spine node/);
 });

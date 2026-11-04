@@ -77,10 +77,14 @@ assistant text and is kept, with user messages and arrivals, in the memory of
 the node that closes over it. A reply in the same sampling as a structural
 operation is rejected.
 
-A closed node renders as its memory summary first, then what it keeps in their
-original order: user messages, replies, births, arrivals and its children's
-memories, each child rendered by the same rule. A kept reply thus follows the
-account of the work behind it.
+A closed node renders what it keeps in their original order (user messages,
+replies, births, arrivals and its children's memories), then the sampling that
+closed it (its model output labelled `WithoutReasoning`), then its memory summary, written by that
+sampling. The model thus sees that it closed the node, and the context after a
+Close ends with the account of the node's work. Inside an ancestor's memory a
+child renders as its memory slots only; the closing sampling belonged to the
+ancestor's work and folds with it. Other tool calls in the closing sampling
+stay visible with it.
 
 v3 removes v2's `terminal_results`, `SpawnResult` and `SpawnEvidence`; a v2
 client is rejected by the schema check.

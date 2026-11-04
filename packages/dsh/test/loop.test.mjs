@@ -7,7 +7,7 @@ import test from "node:test";
 import { createUserMessage } from "@deepseek-ai/dsh-llm";
 
 import { mountDsh } from "./harness.mjs";
-import { call, memory, node, shown, staged } from "./shown.mjs";
+import { call, closing, memory, node, shown, staged } from "./shown.mjs";
 
 async function scenario(replies, drive) {
   const dsh = await mountDsh(typeof replies === "function" ? replies(() => dsh) : replies);
@@ -34,7 +34,7 @@ test("Open shows the node; Close replaces it with its memory", async () => {
   assert.deepEqual(run.requests, [
     ["user: [U1]\nstart", "context: …"],
     ["user: [U1]\nstart", "context: …", call("spine_open", { goal: "inspect" }), staged("spine_open"), node("1.1", "inspect")],
-    ["user: [U1]\nstart", "context: …", memory("1.1", "found it")],
+    ["user: [U1]\nstart", "context: …", ...closing("1.1", "found it")],
   ]);
   assert.equal(run.samplings, 3);
 });
@@ -61,7 +61,8 @@ test("Next, nesting and a second user turn: Close keeps user messages, replies a
     "user: [U2]\nmore", call("spine_open", { goal: "C" }), staged("spine_open"), node("1.2.1", "C"),
   ]);
   assert.deepEqual(run.requests[6], [
-    "user: [U1]\nstart", "context: …", memory("1.1", "memA"), memory("1.2", "memB"), "assistant: reply1", "user: [U2]\nmore", memory("1.2.1", "memC"),
+    "user: [U1]\nstart", "context: …", memory("1.1", "memA"), "assistant: reply1", "user: [U2]\nmore", memory("1.2.1", "memC"),
+    ...closing("1.2", "memB"),
   ]);
 });
 
@@ -104,25 +105,26 @@ test("runtime context DSH adds inside a node stays in place when the node closes
   assert.equal(run.requests[2].at(-1), "context: …", "DSH added runtime context inside node A");
   assert.deepEqual(run.requests[3], [
     "user: [U1]\nstart", "context: …", "context: …",
-    memory("1.1", "memA"),
+    ...closing("1.1", "memA"),
   ]);
 });
 
-test("spine_close beside another tool call is a tool error; called alone it closes", async () => {
+test("spine_close beside another tool call closes the node; both calls stay visible", async () => {
   const run = await scenario((dsh) => [
     [["spine_open", { goal: "A" }]],
     () => {
       dsh().ctx.tools.register(probeTool);
       return [["spine_close", { memory: "memA" }], ["probe", {}]];
     },
-    [["spine_close", { memory: "memA" }]],
     "done",
   ], (dsh) => dsh.run("start"));
   assert.deepEqual(run.ends, ["completed"]);
   const results = run.events.filter((event) => event.type === "tool/result").map((event) => event.data.message);
-  assert.deepEqual(results.map((message) => message.isError === true), [false, true, false, false]);
-  assert.match(results[1].content[0].text, /spine_close must be the only tool call in its response/);
-  assert.deepEqual(run.requests[3], ["user: [U1]\nstart", "context: …", memory("1.1", "memA")]);
+  assert.deepEqual(results.map((message) => message.isError === true), [false, false, false]);
+  assert.deepEqual(run.requests[2], [
+    "user: [U1]\nstart", "context: …", 'assistant: spine_close {"memory":"memA"}probe {}', staged("spine_close"), "tool: probed",
+    memory("1.1", "memA"),
+  ]);
 });
 
 test("a failed request and a cancelled one leave the plan as it was", async () => {
@@ -158,7 +160,7 @@ test("text cut off at max tokens is no reply: Close folds it into the node", asy
   );
   assert.deepEqual(run.ends, ["max-tokens", "completed"]);
   assert.deepEqual(run.requests[3], [
-    "user: [U1]\nstart", "context: …", memory("1.1", "m"), "user: [U2]\nmore",
+    "user: [U1]\nstart", "context: …", "user: [U2]\nmore", ...closing("1.1", "m"),
   ]);
 });
 

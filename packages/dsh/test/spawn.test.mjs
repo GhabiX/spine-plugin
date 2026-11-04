@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { mountDsh } from "./harness.mjs";
-import { arrival, call, memory, node, shown, staged } from "./shown.mjs";
+import { arrival, call, closing, memory, node, shown, staged } from "./shown.mjs";
 
 const X = "session-1:spawn:1.1.1";
 const Y = "session-1:spawn:1.1.2";
@@ -59,8 +59,8 @@ test("children start from the log before the Spawn; each arrival wakes the paren
     // Close keeps the births and arrivals, as it keeps child memories; the
     // replies given while a birth was unarrived only reported waiting.
     assert.deepEqual(parent[5], [
-      "user: [U1]\nstart", "context: …", memory("1.1", "m"), ...births.slice(2), arrival("1.1.1", "completed", "x is 42"),
-      arrival("1.1.2", "completed", "y is 7"),
+      "user: [U1]\nstart", "context: …", ...births.slice(2), arrival("1.1.1", "completed", "x is 42"),
+      arrival("1.1.2", "completed", "y is 7"), ...closing("1.1", "m"),
     ]);
     assert.deepEqual(ends(dsh, "session-1"), ["completed", "completed", "completed"]);
 
@@ -107,9 +107,8 @@ test("Close and a child's end wait for their children: a reply before they arriv
     assert.match(early.content[0].text, /Spawned children 1\.1\.1 \(X\), 1\.1\.2 \(Y\) have not arrived/);
 
     const last = requestsOf(dsh, "session-1").at(-1);
-    assert.ok(!last.some((line) => line.startsWith("assistant: spine_close")), "the closing sampling folded with the node");
-    const kept = last.findIndex((line) => line.startsWith("user: <spine_arrival"));
-    assert.ok(kept > last.indexOf(memory("1.1", "m")) && last.includes(memory("1.1", "m")), "the memory leads what the node keeps");
+    assert.deepEqual(last.slice(-3), closing("1.1", "m"), "the closing call, then the memory, end the context");
+    assert.ok(last.findLastIndex((line) => line.startsWith("user: <spine_arrival")) < last.length - 3, "what the node keeps comes first");
     assert.deepEqual(last.filter((line) => line.startsWith("user: <spine_arrival")).toSorted(), [
       arrival("1.1.1", "completed", "x after X1 and X2"),
       arrival("1.1.2", "completed", "I am done"),
@@ -286,9 +285,8 @@ test("a headless run ends only after the parent has taken its children's arrival
   try {
     const agent = await dsh.runHeadless("start");
     const last = requestsOf(dsh, "session-1").at(-1);
-    assert.ok(!last.some((line) => line.startsWith("assistant: spine_close")), "the closing sampling folded with the node");
-    const kept = last.findIndex((line) => line.startsWith("user: <spine_arrival"));
-    assert.ok(kept > last.indexOf(memory("1.1", "m")) && last.includes(memory("1.1", "m")), "the memory leads what the node keeps");
+    assert.deepEqual(last.slice(-3), closing("1.1", "m"), "the closing call, then the memory, end the context");
+    assert.ok(last.findLastIndex((line) => line.startsWith("user: <spine_arrival")) < last.length - 3, "what the node keeps comes first");
     assert.deepEqual(last.filter((line) => line.startsWith("user: <spine_arrival")).toSorted(), [
       arrival("1.1.1", "completed", "x is 42"),
       arrival("1.1.2", "completed", "y is 7"),
