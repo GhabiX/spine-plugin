@@ -143,7 +143,7 @@ test("Pi renders only the canonical Spine-owned projection forms", () => {
   assert.equal(messages[2].role, "custom");
   assert.equal(messages[2].customType, PI_SPINE_BIRTH_MESSAGE_TYPE);
   assert.equal(messages[2].details.kind, "birth");
-  assert.equal(messages[2].content, '<spine_spawn node_id="0.3" summary="task &lt;a&gt;">\nprompt\n</spine_spawn>');
+  assert.equal(messages[2].content, '<spine_spawn node_id="0.3" summary="task &lt;a&gt;">\n</spine_spawn>');
 
   // Every provider receives each Spine item where it was projected.
   const provider = convertToLlm(messages);

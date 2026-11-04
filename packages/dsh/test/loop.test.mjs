@@ -7,7 +7,7 @@ import test from "node:test";
 import { createUserMessage } from "@deepseek-ai/dsh-llm";
 
 import { mountDsh } from "./harness.mjs";
-import { call, closing, memory, node, shown, staged } from "./shown.mjs";
+import { call, closing, memory, node, shown, staged, closed } from "./shown.mjs";
 
 async function scenario(replies, drive) {
   const dsh = await mountDsh(typeof replies === "function" ? replies(() => dsh) : replies);
@@ -34,7 +34,7 @@ test("Open shows the node; Close shows its call, then its memory", async () => {
   assert.deepEqual(run.requests, [
     ["user: [U1]\nstart", "context: …"],
     ["user: [U1]\nstart", "context: …", call("spine_open", { goal: "inspect" }), staged("spine_open"), node("1.1", "inspect")],
-    ["user: [U1]\nstart", "context: …", ...closing("1.1", "found it")],
+    ["user: [U1]\nstart", "context: …", closed("1.1", "inspect"), ...closing("1.1", "found it")],
   ]);
   assert.equal(run.samplings, 3);
 });
@@ -55,13 +55,13 @@ test("Next, nesting and a second user turn: Close keeps user messages, replies a
   });
   assert.deepEqual(run.ends, ["completed", "completed"]);
   const next = [call("spine_next", { memory: "memA", goal: "B" }), staged("spine_next")];
-  assert.deepEqual(run.requests[2], ["user: [U1]\nstart", "context: …", memory("1.1", "memA"), ...next, node("1.2", "B")]);
+  assert.deepEqual(run.requests[2], ["user: [U1]\nstart", "context: …", closed("1.1", "A"), memory("1.1", "memA"), ...next, node("1.2", "B")]);
   assert.deepEqual(run.requests[4], [
-    "user: [U1]\nstart", "context: …", memory("1.1", "memA"), ...next, node("1.2", "B"), "assistant: reply1",
+    "user: [U1]\nstart", "context: …", closed("1.1", "A"), memory("1.1", "memA"), ...next, node("1.2", "B"), "assistant: reply1",
     "user: [U2]\nmore", call("spine_open", { goal: "C" }), staged("spine_open"), node("1.2.1", "C"),
   ]);
   assert.deepEqual(run.requests[6], [
-    "user: [U1]\nstart", "context: …", memory("1.1", "memA"), "assistant: reply1", "user: [U2]\nmore", memory("1.2.1", "memC"),
+    "user: [U1]\nstart", "context: …", closed("1.1", "A"), memory("1.1", "memA"), closed("1.2", "B"), "assistant: reply1", "user: [U2]\nmore", memory("1.2.1", "memC"),
     ...closing("1.2", "memB"),
   ]);
 });
@@ -76,7 +76,7 @@ test("a sampling that closed a node shows without its reasoning; the opening one
   const open = `assistant: <reasoning>${call("spine_open", { goal: "A" }).slice("assistant: ".length)}`;
   assert.deepEqual(run.requests[1], ["user: [U1]\nstart", "context: …", open, staged("spine_open"), node("1.1", "A")]);
   // The Next sampling belongs to node 1.2: its other result stays; it lost its reasoning.
-  assert.deepEqual(run.requests[2].slice(0, 4), ["user: [U1]\nstart", "context: …", memory("1.1", "memA"),
+  assert.deepEqual(run.requests[2].slice(0, 5), ["user: [U1]\nstart", "context: …", closed("1.1", "A"), memory("1.1", "memA"),
     "assistant: spine_next {\"memory\":\"memA\",\"goal\":\"B\"}probe {}"]);
   assert.equal(run.requests[2].at(-1), node("1.2", "B"));
   assert.equal(run.events.filter((event) => event.type === "plugin:spinejit/without-reasoning").length, 1);
@@ -104,7 +104,7 @@ test("runtime context DSH adds inside a node stays in place when the node closes
   assert.deepEqual(run.ends, ["completed"]);
   assert.equal(run.requests[2].at(-1), "context: …", "DSH added runtime context inside node A");
   assert.deepEqual(run.requests[3], [
-    "user: [U1]\nstart", "context: …", "context: …",
+    "user: [U1]\nstart", "context: …", "context: …", closed("1.1", "A"),
     ...closing("1.1", "memA"),
   ]);
 });
@@ -122,7 +122,7 @@ test("spine_close beside another tool call closes the node; both calls stay visi
   const results = run.events.filter((event) => event.type === "tool/result").map((event) => event.data.message);
   assert.deepEqual(results.map((message) => message.isError === true), [false, false, false]);
   assert.deepEqual(run.requests[2], [
-    "user: [U1]\nstart", "context: …", 'assistant: spine_close {"memory":"memA"}probe {}', staged("spine_close"), "tool: probed",
+    "user: [U1]\nstart", "context: …", closed("1.1", "A"), 'assistant: spine_close {"memory":"memA"}probe {}', staged("spine_close"), "tool: probed",
     memory("1.1", "memA"),
   ]);
 });
@@ -160,7 +160,7 @@ test("text cut off at max tokens is no reply: Close folds it into the node", asy
   );
   assert.deepEqual(run.ends, ["max-tokens", "completed"]);
   assert.deepEqual(run.requests[3], [
-    "user: [U1]\nstart", "context: …", "user: [U2]\nmore", ...closing("1.1", "m"),
+    "user: [U1]\nstart", "context: …", closed("1.1", "A"), "user: [U2]\nmore", ...closing("1.1", "m"),
   ]);
 });
 

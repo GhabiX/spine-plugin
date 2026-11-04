@@ -13,6 +13,7 @@ export function shown(request) {
 }
 
 export const node = (id, summary) => `spine: <spine_node id="${id}" summary="${summary}" status="opened">\n</spine_node>`;
+export const closed = (id, summary) => `spine: <spine_node id="${id}" summary="${summary}" status="closed">\n</spine_node>`;
 export const memory = (id, body) => `spine: <spine_memory node_id="${id}">\n${body}\n</spine_memory>`;
 export const call = (name, input) => `assistant: ${name} ${JSON.stringify(input)}`;
 export const staged = (name) => `tool: Spine ${name} staged`;

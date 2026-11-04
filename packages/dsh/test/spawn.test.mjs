@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { mountDsh } from "./harness.mjs";
-import { arrival, call, closing, memory, node, shown, staged } from "./shown.mjs";
+import { arrival, call, closing, memory, node, shown, staged, closed } from "./shown.mjs";
 
 const X = "session-1:spawn:1.1.1";
 const Y = "session-1:spawn:1.1.2";
@@ -51,15 +51,15 @@ test("children start from the log before the Spawn; each arrival wakes the paren
     const parent = requestsOf(dsh, "session-1");
     const births = [
       call("spine_spawn", spawnXY[0][1]), staged("spine_spawn"),
-      'spine: <spine_spawn node_id="1.1.1" summary="X">\nfind x\n</spine_spawn>',
-      'spine: <spine_spawn node_id="1.1.2" summary="Y">\nfind y\n</spine_spawn>',
+      'spine: <spine_spawn node_id="1.1.1" summary="X">\n</spine_spawn>',
+      'spine: <spine_spawn node_id="1.1.2" summary="Y">\n</spine_spawn>',
     ];
     assert.deepEqual(parent[3], [...parent[1], ...births, "assistant: waiting", arrival("1.1.1", "completed", "x is 42")]);
     assert.deepEqual(parent[4], [...parent[3], "assistant: got x", arrival("1.1.2", "completed", "y is 7")]);
     // Close keeps the births and arrivals, as it keeps child memories; the
     // replies given while a birth was unarrived only reported waiting.
     assert.deepEqual(parent[5], [
-      "user: [U1]\nstart", "context: …", ...births.slice(2), arrival("1.1.1", "completed", "x is 42"),
+      "user: [U1]\nstart", "context: …", closed("1.1", "A"), ...births.slice(2), arrival("1.1.1", "completed", "x is 42"),
       arrival("1.1.2", "completed", "y is 7"), ...closing("1.1", "m"),
     ]);
     assert.deepEqual(ends(dsh, "session-1"), ["completed", "completed", "completed"]);

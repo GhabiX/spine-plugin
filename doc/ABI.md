@@ -77,12 +77,16 @@ assistant text and is kept, with user messages and arrivals, in the memory of
 the node that closes over it. A reply in the same sampling as a structural
 operation is rejected.
 
-A closed node renders what it keeps in their original order (user messages,
-replies, births, arrivals and its children's memories), then the sampling that
-closed it (its model output labelled `WithoutReasoning`), then its memory summary, written by that
+A closed task node starts with its descriptor, now `Closed`: its id and goal,
+where its folded work began. It then renders what it keeps in their original
+order (user messages, replies, births, arrivals and its children's memories),
+then the sampling that closed it (its model output labelled `WithoutReasoning`), then its memory summary, written by that
 sampling. The model thus sees that it closed the node, and the context after a
-Close ends with the account of the node's work. Inside an ancestor's memory a
-child renders as its memory slots only; the closing sampling belonged to the
+Close ends with the account of the node's work. All of this replaces the
+node's own suffix, so everything rendered before the node's first cell is
+unchanged. A birth node has no descriptor: its birth record is where the
+spawned branch starts. Inside an ancestor's memory a child renders as its
+memory slots only; the closing sampling belonged to the
 ancestor's work and folds with it. Other tool calls in the closing sampling
 stay visible with it.
 

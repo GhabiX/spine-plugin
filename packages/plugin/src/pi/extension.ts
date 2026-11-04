@@ -1231,7 +1231,9 @@ function launchChildren(
  * After a restart no child of this session is running. Each child's newest
  * session is read as its first attempt, without running again: one that
  * ended arrives as it ended, one that did not arrives aborted. Both failures
- * await a recovery decision, and without a UI are abandoned.
+ * await a recovery decision, and without a UI are abandoned. An arrival read
+ * from a child's record does not wake the parent; one from a child that ran
+ * again after a Continue or Retry does, like any running child's.
  */
 async function recoverChildren(
   pi: ExtensionAPI,
@@ -1248,6 +1250,7 @@ async function recoverChildren(
     const ref = refs[index]!;
     const latest = await latestChildSession(scope, ref);
     const sessionIds = new Map<number, string>();
+    let ran = false;
     session.children.start(birth, (signal) => runSpawnChild({
       producer: birth.producer,
       task: birth.task,
@@ -1267,13 +1270,14 @@ async function recoverChildren(
             };
           }
           // Continue is offered only for a saved session.
+          ran = true;
           return executePiChild(pi, ctx, scope, ref, null, [], task, {
             ...child,
             attempt: latest!.attempt + child.attempt,
           }, sessionIds, childInvocation);
         },
       },
-    }), false);
+    }), () => ran);
   }
 }
 

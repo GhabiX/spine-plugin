@@ -70,7 +70,9 @@ export type DeliverArrival = (arrival: SpawnArrival, wake: boolean) => void;
 
 interface ChildRun {
   controller: AbortController;
-  wake: boolean;
+  /** Whether the arrival starts a turn, read when it is handed over. */
+  wake: () => boolean;
+  stopped: boolean;
   disposed: boolean;
 }
 
@@ -103,11 +105,15 @@ export class SpawnChildren {
     for (const birth of fresh) this.start(birth, (signal) => run(birth, peers, signal));
   }
 
-  /** Starts one child with its own runner, unless it is already tracked. */
-  start(birth: SpawnBirth, runner: SpawnChildRunner, wake = true): void {
+  /**
+   * Starts one child with its own runner, unless it is already tracked. Its
+   * arrival wakes the parent if `wake` holds when it is handed over, unless
+   * the user stopped it.
+   */
+  start(birth: SpawnBirth, runner: SpawnChildRunner, wake: () => boolean = () => true): void {
     const key = birth.producer.join(".");
     if (this.#tracked(birth.producer)) return;
-    const run: ChildRun = { controller: new AbortController(), wake, disposed: false };
+    const run: ChildRun = { controller: new AbortController(), wake, stopped: false, disposed: false };
     this.#runs.set(key, run);
     void runner(run.controller.signal)
       .catch((cause: unknown) => toArrival(birth.producer, {
@@ -158,7 +164,7 @@ export class SpawnChildren {
   /** User Stop: cancel every child; the aborted arrivals do not wake the agent. */
   stop(): void {
     for (const run of this.#runs.values()) {
-      run.wake = false;
+      run.stopped = true;
       run.controller.abort();
     }
   }
@@ -182,7 +188,7 @@ export class SpawnChildren {
     this.#runs.delete(key);
     if (!run.disposed) {
       this.#handed.set(key, arrival);
-      this.#deliver(arrival, run.wake);
+      this.#deliver(arrival, !run.stopped && run.wake());
     }
     this.#notify();
   }

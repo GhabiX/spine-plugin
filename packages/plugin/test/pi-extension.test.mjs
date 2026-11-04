@@ -1011,6 +1011,60 @@ test("after a restart a child that ended is read back without running, a running
   assert.equal(headless.aborts, 0);
 });
 
+test("after a restart a child continued from the dialog runs again and its arrival wakes the parent", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-spine-spawn-continue-"));
+  const sessionFile = join(dir, "parent.jsonl");
+  const pi = mockPi();
+  const branch = recordBranch(pi);
+  const ctx = extensionContext("pi-continue", { sessionFile });
+  ctx.context.sessionManager.getBranch = () => branch;
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  let started = 0;
+  pi.api.exec = async () => {
+    started += 1;
+    return held;
+  };
+  createPiExtension()(pi.api);
+  await pi.emit("session_start", { type: "session_start", reason: "new" }, ctx.context);
+  await pi.emit("message_end", { type: "message_end", message: user("request") }, ctx.context);
+  await sample(pi, ctx, [{ id: "spawn-1", name: "spine_spawn", input: { tasks: SPAWN_TASKS } }]);
+  await until(() => started === 2);
+  const origin = branch.find((entry) => entry.message?.content?.[0]?.id === "spawn-1").id;
+  await appendChildEntries(join(dir, "spine-spawn", "pi-continue", `${origin}.1.1.jsonl`), [assistant([{ type: "text", text: "alpha memory" }], "stop")]);
+  await pi.emit("session_shutdown", { type: "session_shutdown", reason: "quit" }, ctx.context);
+  release({ stdout: "", stderr: "", code: 0, killed: false });
+
+  const restarted = mockPi();
+  let reran = 0;
+  restarted.api.exec = async (_command, args) => {
+    reran += 1;
+    return childReply(args, "beta memory");
+  };
+  const asked = [];
+  const ui = extensionContext("pi-continue", {
+    sessionFile,
+    branch,
+    select: async (title, choices) => {
+      asked.push(title);
+      return choices.includes("Continue") ? "Continue" : "Abandon";
+    },
+    input: async () => "",
+  });
+  createPiExtension()(restarted.api);
+  await restarted.emit("session_start", { type: "session_start", reason: "resume" }, ui.context);
+  await until(() => restarted.sent.length === 2);
+  const byProducer = Object.fromEntries(restarted.sent.map(([message, options]) => [message.details.arrival.producer.join("."), [message.details.arrival, options]]));
+  // Read back from its record: no run, no wake.
+  assert.deepEqual(byProducer["1.1"], [{ producer: [1, 1], outcome: "completed", memory: "alpha memory" }, { deliverAs: "steer", triggerTurn: false }]);
+  // Continued: it ran again, and its arrival starts the parent's next turn.
+  assert.equal(asked.length, 1);
+  assert.equal(reran, 1);
+  assert.equal(byProducer["1.2"][0].outcome, "completed");
+  assert.equal(byProducer["1.2"][0].memory, "beta memory");
+  assert.deepEqual(byProducer["1.2"][1], { deliverAs: "steer", triggerTurn: true });
+});
+
 test("Stop cancels running children; their aborted arrivals do not wake the agent", async () => {
   const pi = mockPi();
   const branch = recordBranch(pi);

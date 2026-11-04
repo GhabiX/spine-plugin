@@ -279,7 +279,9 @@ loader and Spine replay preflight. If the parent restarts, each child's newest
 session file is read as its first attempt, without running again: a child that
 had ended arrives as it ended, one that had not arrives aborted. Either failure
 is offered `Continue` or `Abandon` (only `Abandon` without a UI), since the
-birth prefix is not kept outside the child session.
+birth prefix is not kept outside the child session. An arrival read back this
+way does not wake the parent; a child that runs again after `Continue` wakes
+it when it arrives, like any running child.
 
 An arrival is held until it is in the session. After a Stop, Pi drops queued
 steering messages, so the held arrivals that never reached the session are

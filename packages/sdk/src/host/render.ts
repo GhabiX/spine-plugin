@@ -20,9 +20,13 @@ export function spineMemoryText(owner: readonly number[], body: string): string 
   return `<spine_memory node_id="${owner.join(".")}">\n${body}\n</spine_memory>`;
 }
 
-/** The birth record of a spawned branch. */
+/**
+ * The birth record of a spawned branch: where it starts and what it is for,
+ * like a node descriptor. Its assignment is in the Spawn call that bore it
+ * and is addressed to the child, so the parent does not see it again here.
+ */
 export function spineBirthText(owner: readonly number[], task: SpawnTask): string {
-  return `<spine_spawn node_id="${owner.join(".")}" summary="${escapeXmlAttribute(task.summary)}">\n${task.prompt}\n</spine_spawn>`;
+  return `<spine_spawn node_id="${owner.join(".")}" summary="${escapeXmlAttribute(task.summary)}">\n</spine_spawn>`;
 }
 
 /** A spawned branch's terminal result as its parent receives it. */
