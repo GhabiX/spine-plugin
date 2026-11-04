@@ -984,7 +984,9 @@ test("Spawn returns at once; children start after the commit and each arrives on
   assert.equal(partial.admissions[0].block, true);
   await pi.emit("message_end", { type: "message_end", message: pi.sent[1][0] }, ctx.context);
 
+  // A reply stays in the closed node when a user message answered it.
   await sample(pi, ctx, [], "interim answer for the user");
+  await pi.emit("message_end", { type: "message_end", message: user("thanks") }, ctx.context);
   await sample(pi, ctx, [{ id: "close-1", name: "spine_close", input: { memory: "node memory" } }]);
   assert.equal(ctx.aborts, 0);
   const after = contents((await pi.emit("context", { type: "context", messages: [] }, ctx.context)).messages);
