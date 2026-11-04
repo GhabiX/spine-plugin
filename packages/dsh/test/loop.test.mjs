@@ -25,7 +25,7 @@ async function scenario(replies, drive) {
   }
 }
 
-test("Open shows the node; Close replaces it with its memory", async () => {
+test("Open shows the node; Close shows its call, then its memory", async () => {
   const run = await scenario(
     [[["spine_open", { goal: "inspect" }]], [["spine_close", { memory: "found it" }]], "done"],
     (dsh) => dsh.run("start"),

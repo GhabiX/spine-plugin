@@ -41,19 +41,25 @@ export function spineToolRefusal(
   projection: SpineProjection,
   name: SpineToolName,
   entered: ReadonlySet<string>,
+  /** In a Spawn child, its birth. The child starts in the node it was spawned in, which belongs to its parent. */
+  birth: readonly number[] | null,
 ): string | null {
   if (name !== "spine_close" && name !== "spine_next") return null;
-  const cursor = projection.nodes.find((node) =>
-    node.id.length === projection.cursor.length &&
-    node.id.every((part, index) => part === projection.cursor[index]),
-  );
+  const cursor = projection.nodes.find((node) => sameId(node.id, projection.cursor));
   if (cursor === undefined) return "Spine cursor is missing from the derived tree";
   if (cursor.kind === "RootEpoch") return "no open Spine node is available to close";
+  if (birth !== null && sameId(cursor.id, birth.slice(0, -1))) {
+    return `Spine node ${cursor.id.join(".")} belongs to the session that spawned you: a Spawn child closes only the nodes it opened. End your work with a final reply; that reply is your result.`;
+  }
   const pending = unarrivedBirths(projection, projection.cursor).filter((birth) => !entered.has(birth.producer.join(".")));
   if (pending.length > 0) {
     return `Spawned children ${formatBirths(pending)} have not arrived. Each result arrives as its own message; close this node after they have arrived.`;
   }
   return null;
+}
+
+function sameId(left: readonly number[], right: readonly number[]): boolean {
+  return left.length === right.length && left.every((part, index) => part === right[index]);
 }
 
 export type SpawnChildRunner = (signal: AbortSignal) => Promise<SpawnArrival>;

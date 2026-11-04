@@ -30,6 +30,7 @@ import {
 } from "./events.js";
 import { applySurfaceEdits, planItems, surfaceEdits, type PlanItem, type SurfaceNode } from "./projection.js";
 import { dropReasoning, hasReasoning } from "./reasoning.js";
+import { sessionBirth } from "./spawn.js";
 
 export const SPINE_FEATURES: FeatureFlag[] = ["jit", "spawn"];
 
@@ -188,8 +189,9 @@ export class SpineAgent {
       this.#assertSurfaceShowsPlan();
       const session = this.agent.session;
       await this.#begin(session.seq);
-      // Two empty slots before the response: room for what this sampling's
-      // Open, Close or Next puts in front of it (Next = Close then Open).
+      // Two empty slots before the response: room for what this sampling
+      // puts in front of it (a Next: the closed node's memory); Open and Close
+      // add their text after it.
       // The first marks in the log where the sampling began.
       for (const message of [samplingSlot(), emptySlot()]) {
         session.append("developer/message", { turn: this.#turn, step: this.#step, message }, { surfaceOp: "append" });
@@ -209,7 +211,7 @@ export class SpineAgent {
     if (sampling === null) throw new SpineDshError(`${name} ran outside a Spine sampling`);
     if (sampling.called !== null) throw new SpineToolLimitError(sampling.called);
     // What the core would refuse at commit is a tool error now, not a fault later.
-    const refusal = spineToolRefusal(this.#projection!, name, this.#entered);
+    const refusal = spineToolRefusal(this.#projection!, name, this.#entered, sessionBirth(this.agent.id));
     if (refusal !== null) throw new SpineDshError(refusal);
     sampling.called = name;
   }

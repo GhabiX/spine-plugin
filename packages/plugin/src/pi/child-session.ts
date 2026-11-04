@@ -109,6 +109,7 @@ export async function writeChildPrefixSession(options: {
   cwd: string;
   destPath: string;
   entries: readonly unknown[];
+  birth: readonly number[];
   parentSession?: string;
 }): Promise<string> {
   await mkdir(dirname(options.destPath), { recursive: true });
@@ -121,6 +122,8 @@ export async function writeChildPrefixSession(options: {
     cwd: options.cwd,
     // Where the child's own entries begin: readChildState reads past it.
     inheritedEntryCount: options.entries.length,
+    // The Spawn birth this child runs: it starts in the node its parent spawned it in.
+    birth: options.birth,
   };
   if (options.parentSession !== undefined) {
     header.parentSession = options.parentSession;

@@ -119,6 +119,7 @@ function extensionContext(sessionId = "pi-session", options = {}) {
       sessionManager: {
         getSessionId: () => sessionId,
         getBranch: () => options.branch ?? [],
+        getHeader: () => options.header ?? null,
         getSessionFile: () => options.sessionFile,
       },
       ui: {
@@ -1202,6 +1203,25 @@ test("a child that cannot start arrives as errored without faulting the parent; 
   const compact = await pi.emit("session_before_compact", { type: "session_before_compact" }, ctx.context);
   assert.deepEqual(compact, { cancel: true });
   assert.match(ctx.notifications.at(-1)[0], /compaction waits for spawned children 1\.1 \(alpha\), 1\.2 \(beta\)/);
+});
+
+test("a Spawn child cannot close or leave the node it was spawned in, only nodes it opened", async () => {
+  const pi = mockPi();
+  // The child of birth 1.1.2 starts in 1.1, which its parent opened.
+  const ctx = extensionContext("pi-child", { header: { birth: [1, 1, 2] } });
+  createPiExtension()(pi.api);
+  await pi.emit("session_start", { type: "session_start", reason: "new" }, ctx.context);
+  await pi.emit("message_end", { type: "message_end", message: user("request") }, ctx.context);
+  await sample(pi, ctx, [{ id: "open-1", name: "spine_open", input: { goal: "parent scope" } }]);
+  for (const [id, name, input] of [["close-1", "spine_close", { memory: "x" }], ["next-1", "spine_next", { goal: "y", memory: "x" }]]) {
+    const refused = await sample(pi, ctx, [{ id, name, input }]);
+    assert.equal(refused.admissions[0].block, true);
+    assert.match(refused.admissions[0].reason, /1\.1 belongs to the session that spawned you/);
+  }
+  await sample(pi, ctx, [{ id: "open-2", name: "spine_open", input: { goal: "own step" } }]);
+  const own = await sample(pi, ctx, [{ id: "close-2", name: "spine_close", input: { memory: "own step done" } }]);
+  assert.equal(own.admissions[0], undefined);
+  assert.equal(ctx.aborts, 0);
 });
 
 test("root close and next return to the model without aborting", async () => {

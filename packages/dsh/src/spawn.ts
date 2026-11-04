@@ -36,6 +36,12 @@ export function childSessionId(parent: string, producer: readonly number[]): Ses
   return SessionId(`${parent}:spawn:${producer.join(".")}`);
 }
 
+/** The birth a session runs, read back from its childSessionId; null for a session that is not a Spawn child. */
+export function sessionBirth(id: string): number[] | null {
+  const match = /:spawn:(\d+(?:\.\d+)*)$/.exec(id);
+  return match === null ? null : match[1]!.split(".").map(Number);
+}
+
 /**
  * A child's own log, the events after its inherited prefix, as the Spawn end
  * rule reads it: its source messages, as the Spine core observes them, and

@@ -1050,6 +1050,7 @@ async function executePiChild(
       cwd: ctx.cwd,
       destPath,
       entries: prefix,
+      birth: child.producer,
       ...(scope.parentSessionFile === undefined ? {} : { parentSession: scope.parentSessionFile }),
     });
     sessionIds.set(child.attempt, sessionId);
@@ -1152,6 +1153,7 @@ function controlToolAdmission(
     slot.current.latestContext.projection,
     toolName as (typeof CONTROL_TOOLS)[number],
     enteredArrivals(ctx),
+    (ctx.sessionManager.getHeader() as { birth?: number[] } | null)?.birth ?? null,
   );
   return reason === null ? undefined : { block: true, reason };
 }

@@ -165,7 +165,8 @@ state has changed. It does not cache the current Pi message view. Ordinary
 requests and compact summaries synchronously materialize messages from the
 published plan, the relevant branch snapshot, and existing source bindings.
 Host context edits therefore take effect without inventing a source or commit;
-closed scopes still expose only their returned memory. The publication path
+closed scopes still expose only what they keep, their returned memory and, until
+their parent closes, the call that closed them. The publication path
 also materializes messages, so this change does not establish a speedup.
 
 Before recording an execution or starting Spawn children, the SDK calls the
@@ -229,7 +230,11 @@ its birth id, since birth ids repeat across the tree branches of one session.
 It then receives an identity/peer assignment envelope. The child process loads the same discovered packages/extensions as a
 normal Pi agent, keeps the parent's active tool allowlist, and can use
 `spine_open` / `spine_close` / `spine_next` / `spine_spawn`. It has no return
-tool: as with any subagent, its last reply is what it returns.
+tool: as with any subagent, its last reply is what it returns. It starts in the
+node its parent spawned it in, which is the parent's: a child closes only the
+nodes it opened, so `spine_close` and `spine_next` there are refused with a
+tool error that tells it to end with its final reply. The child knows its birth
+from its session (Pi: the header's `birth`; DSH: its session id).
 
 Each child's final result returns on its own as an arrival: a custom
 `spine.arrival` message sent with `deliverAs: "steer"`, which starts a turn

@@ -79,6 +79,26 @@ test("children start from the log before the Spawn; each arrival wakes the paren
   }
 });
 
+test("a child cannot close the node it was spawned in: the tool errors and its final reply is its result", async () => {
+  const dsh = await mountDsh({
+    "session-1": [[["spine_open", { goal: "A" }]], spawnXY, "waiting", "waiting", "got both", "done"],
+    [X]: [[["spine_close", { memory: "x is 42" }]], "x is 42"],
+    [Y]: ["y is 7"],
+  });
+  try {
+    const agent = await dsh.run("start");
+    await until(() => ends(dsh, X).length === 1 && ends(dsh, Y).length === 1);
+    await agent.whenIdle();
+    const refused = dsh.events(X).filter((event) => event.type === "tool/result").map((event) => event.data.message)
+      .find((message) => message.isError === true);
+    assert.match(refused.content[0].text, /1\.1 belongs to the session that spawned you/);
+    const last = requestsOf(dsh, "session-1").at(-1);
+    assert.ok(last.includes(arrival("1.1.1", "completed", "x is 42")), "X's final reply is its result");
+  } finally {
+    await dsh.dispose();
+  }
+});
+
 test("Close and a child's end wait for their children: a reply before they arrive does not end it", async () => {
   const [x1, y] = [gate(), gate()];
   const dsh = await mountDsh({

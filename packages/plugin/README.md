@@ -163,9 +163,10 @@ descriptors, memory, births and arrivals are Pi custom messages, which Pi sends
 to every provider as user messages in place; kept replies are assistant
 messages. None of them is a system message, so no provider moves them into the
 initial system content, and opening a node only appends to the request. A
-closed node shows its memory first, then the user messages, replies and
-arrivals it keeps, so a kept reply never reads as an answer given without the
-work behind it.
+closed node shows the user messages, replies and arrivals it keeps in the order
+they came, then the `spine_close` call that closed it (without its reasoning),
+then its memory: the model sees that it closed the node, and the context ends
+with the account of the node's work.
 
 ## Sampling boundary
 
