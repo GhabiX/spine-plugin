@@ -39,10 +39,14 @@ export function apply(ctx: Context): void {
     agents.get(session.id)?.accept(event);
   });
   ctx.on("agent/created", async ({ agent }) => {
-    // An arrival enters only the session that bore it, once, while its birth is open.
+    // An arrival enters only the session that bore it, once, while its birth is
+    // open. The inbox is durable, so one still pending there, even from before
+    // a restart, has already been handed over.
     const own = new SpawnChildren((arrival, wake) => {
       const producer = arrival.producer.join(".");
       if (!agents.get(agent.id)?.openBirths().some((birth) => birth.producer.join(".") === producer)) return;
+      if ([...agent.inbox.nextStep, ...agent.inbox.nextTurn].some((message) =>
+        message.source.kind === "spine-arrival" && message.source.arrival.producer.join(".") === producer)) return;
       if (wake) agent.steer(arrivalMessage(arrival));
       else agent.inject(arrivalMessage(arrival));
     });

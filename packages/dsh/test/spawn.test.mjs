@@ -190,7 +190,8 @@ test("a restarted parent reads each child's end from its log: none reruns or wak
     const run = first.run("start");
     await until(() => ends(first, X).length === 1 && ends(first, Z).length === 1 && ends(first, W).length === 1 &&
       requestsOf(first, Y).length === 1 && requestsOf(first, `${W}:spawn:1.1.2`).length === 1 && first.agent.inbox.nextStep.length === 2);
-    root = first.root;
+    // X's and Z's arrivals wait in the parent's durable inbox when it is killed.
+    root = await first.crashed();
     void run.catch(() => {});
   } finally {
     await first.dispose();

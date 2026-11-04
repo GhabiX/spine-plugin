@@ -1,6 +1,6 @@
 // A real DeepSeek Harness world for tests: the production AgentLoop, session
 // store and official JSONL persistence, with a scripted model adapter.
-import { mkdtemp } from "node:fs/promises";
+import { cp, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Context } from "@deepseek-ai/cordis";
@@ -139,6 +139,13 @@ export async function mountDsh(replies, { plugin = true, root } = {}) {
       } finally {
         await handle.close();
       }
+    },
+    /** The files a killed process leaves: each session flushed, copied before disposal can tidy them. */
+    async crashed() {
+      for (const session of ctx.sessions.list()) await ctx.sessions.flush(session);
+      const copy = await mkdtemp(join(tmpdir(), "dsh-spinejit-"));
+      await cp(root, copy, { recursive: true });
+      return copy;
     },
     /** Every event a session published, in log order, by agent or session id. */
     events: (agent) => events.get(typeof agent === "string" ? agent : agent.id) ?? [],
