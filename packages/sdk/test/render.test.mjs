@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { SPINE_CHILD_RETURN_TOOL, spineChildAssignmentText } from "../dist/host/render.js";
+import { spineChildAssignmentText } from "../dist/host/render.js";
 
-test("child assignment names identity, peers, descendant tools, and typed return", () => {
+test("child assignment names identity, peers, descendant tools, and its final reply as the return", () => {
   const text = spineChildAssignmentText(
     { summary: "ALPHA", prompt: "return TOKEN_A" },
     [
@@ -20,6 +20,6 @@ test("child assignment names identity, peers, descendant tools, and typed return
   assert.match(text, /spine_next/);
   assert.match(text, /spine_spawn/);
   assert.match(text, /independent parallel sub-assignments/);
-  assert.match(text, new RegExp(`${SPINE_CHILD_RETURN_TOOL} exactly once`));
+  assert.match(text, /ending with a final reply that holds the complete continuation memory/);
   assert.match(text, /Assignment:\nreturn TOKEN_A$/);
 });

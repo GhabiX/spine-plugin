@@ -50,7 +50,7 @@ for (const order of ["l1-first", "sdk-first"]) {
     await f.emit("session_start");
     assert.equal(ready, 0);
     assert.deepEqual(f.pi.getActiveTools(), []);
-    assert.equal(f.tools.size, 5);
+    assert.equal(f.tools.size, 4);
     for (const tool of f.tools.values()) assert.equal(tool.exposure, "hidden");
     const options = { appendSystemPrompt: "unchanged" };
     const messages = [{ role: "user", content: "untouched", timestamp: 1 }];

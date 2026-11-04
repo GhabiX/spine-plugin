@@ -62,13 +62,6 @@ export function spineToolRefusal(
   return null;
 }
 
-/** Why a Spawn child may not return its memory yet, or null: its own children come first. */
-export function childReturnRefusal(projection: SpineProjection, entered: ReadonlySet<string>): string | null {
-  const pending = unarrivedBirths(projection).filter((birth) => !entered.has(birth.producer.join(".")));
-  if (pending.length === 0) return null;
-  return `Spawned children ${formatBirths(pending)} have not arrived. Each result arrives as its own message; return after they have arrived.`;
-}
-
 export type SpawnChildRunner = (signal: AbortSignal) => Promise<SpawnArrival>;
 
 /** Hands an arrival to the parent session; `wake` starts a turn when the agent is idle. */

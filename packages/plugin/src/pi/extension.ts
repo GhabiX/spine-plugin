@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -28,7 +27,6 @@ import {
   loadSpineConfigToml,
   runSpawnChild,
   SpineToolInputError,
-  toArrival,
   type FinishSamplingResult,
   type HostContextEnvelope,
   type PublishedContext,
@@ -41,12 +39,12 @@ import { Type } from "typebox";
 import { watchParent } from "./parent-watch.js";
 import type { SpawnArrival, SpawnTask, SpineProjection } from "@spinejit/spine-sdk";
 import {
-  acceptedChildReturns,
   buildChildContinuation,
   childSessionPath,
   inspectChildSession,
-  readChildReturn,
+  latestChildSession,
   readChildSessionIdentity,
+  readChildState,
   writeChildPrefixSession,
   type ChildBirthRef,
   type ChildSessionScope,
@@ -79,10 +77,8 @@ import { SPINE_TREE_VIEW_REQUEST } from "./tree-view-contract.js";
 import { registerSpineTreeNavigation } from "./navigation/index.js";
 import { queryPiSpineMode, type PiSpineMode } from "./session-mode.js";
 import {
-  childReturnRefusal,
   formatBirths,
   SpawnChildren,
-  SPINE_CHILD_RETURN_TOOL,
   spineChildAssignmentText,
   spineToolRefusal,
   unarrivedBirths,
@@ -215,7 +211,7 @@ function activatePiExtension(
   };
 
   pi.registerFlag(CHILD_FLAG, {
-    description: "Run as a typed Spine Spawn child",
+    description: "Run as a Spine Spawn child",
     type: "boolean",
     default: false,
   });
@@ -246,7 +242,6 @@ function activatePiExtension(
     if (mode === "st") {
       // Inactive alone is insufficient: codemode/deferred tools remain callable.
       registerSpineTools(pi, configToml, "hidden");
-      registerChildReturnTool(pi, "hidden");
       slot.generation += 1;
       disposeCurrent(slot);
       slot.initialization = null;
@@ -405,34 +400,6 @@ function loadCanonicalSpineTools(configToml: string): Array<{
   }
 }
 
-function childActiveTools(pi: ExtensionAPI): string[] {
-  return [
-    ...pi.getActiveTools().filter((name) => name !== SPINE_CHILD_RETURN_TOOL),
-    SPINE_CHILD_RETURN_TOOL,
-  ];
-}
-
-function childToolAllowlist(pi: ExtensionAPI): string[] {
-  return [...new Set([...pi.getActiveTools(), SPINE_CHILD_RETURN_TOOL].filter((name) => name.trim().length > 0))];
-}
-
-function registerChildReturnTool(pi: ExtensionAPI, exposure: "direct" | "hidden" = "direct"): void {
-  pi.registerTool({
-    name: SPINE_CHILD_RETURN_TOOL,
-    exposure,
-    label: "Return Spine Memory",
-    description: "Return the complete model-authored terminal memory for this Spawn child.",
-    parameters: Type.Object({ memory: Type.String({ minLength: 1 }) }),
-    async execute(_toolCallId, params) {
-      return {
-        content: [{ type: "text", text: "Spine child memory accepted" }],
-        details: { accepted: true, memoryBytes: params.memory.length },
-        terminate: true,
-      };
-    },
-  });
-}
-
 function registerLifecycleHandlers(
   pi: ExtensionAPI,
   slot: MutableSessionSlot,
@@ -449,8 +416,6 @@ function registerLifecycleHandlers(
     if (slot.mode !== "sdk") return;
     childMode = pi.getFlag(CHILD_FLAG) === true;
     if (childMode) {
-      registerChildReturnTool(pi);
-      pi.setActiveTools(childActiveTools(pi));
       // Only a parent that declared its PID can be outlived; a child started by
       // hand (or in-process in tests) has nothing to bind to.
       const parentPid = pi.getFlag(PARENT_PID_FLAG);
@@ -578,8 +543,7 @@ function registerLifecycleHandlers(
   pi.on("tool_call", async (event, ctx) => {
     if (slot.mode !== "sdk") return;
     try {
-      const admission = childReturnAdmission(slot, ctx, event.toolName) ??
-        controlToolAdmission(slot, ctx, event.toolName, event.input);
+      const admission = controlToolAdmission(slot, ctx, event.toolName, event.input);
       if (admission !== undefined) return admission;
       await (await requireSession(slot)).lifecycle.registerToolCall(
         event.toolCallId,
@@ -1103,7 +1067,7 @@ async function executePiChild(
         ? buildChildContinuation(child.guidance)
         : buildChildContinuation(child.guidance, assignment);
     } catch (cause) {
-      const diagnostic = clipSpawnDiagnostic(cause instanceof Error ? cause.message : String(cause));
+      const diagnostic = cause instanceof Error ? cause.message : String(cause);
       return {
         outcome: "errored",
         diagnostic,
@@ -1130,7 +1094,7 @@ async function executePiChild(
   if (extensionPaths.length === 0 || extensionPaths.some((path) => typeof path !== "string" || path.length === 0)) {
     throw new Error("Pi Spawn child invocation requires at least one extension module");
   }
-  const tools = childToolAllowlist(pi);
+  const tools = pi.getActiveTools();
   const result = await pi.exec(
     invocation.command,
     [
@@ -1143,39 +1107,29 @@ async function executePiChild(
       ...extensionPaths.flatMap((path) => ["--extension", path]),
       `--${CHILD_FLAG}=true`,
       `--${PARENT_PID_FLAG}=${process.pid}`,
-      ...(tools.length === 0 ? [] : ["--tools", tools.join(",")]),
+      // The child runs with exactly the parent's active tools.
+      ...(tools.length === 0 ? ["--no-tools"] : ["--tools", tools.join(",")]),
       ...childRuntimeFlags(ctx),
       prompt,
     ],
     { cwd: ctx.cwd, signal: child.signal },
   );
   const executionRef = `${producer}:attempt-${child.attempt}:${sessionId}`;
-  const processDiagnostic = childProcessDiagnostic(result);
   // The child's own session is its result record, the same one recovery reads.
-  const accepted = acceptedChildReturns(await readFile(destPath, "utf8"));
-  if (accepted.length !== 1) {
-    return {
-      outcome: result.killed ? "aborted" : "errored",
-      diagnostic: clipSpawnDiagnostic(`Pi Spawn child accepted ${accepted.length} typed returns; ${processDiagnostic}`),
-      executionRef,
-    };
-  }
-  // The typed return is the child's result; a later exit status does not undo it.
-  return {
-    outcome: "completed",
-    memory: accepted[0]!,
-    ...(result.code === 0 ? {} : { diagnostic: clipSpawnDiagnostic(processDiagnostic) }),
-    executionRef,
+  const { open, terminal: end } = readChildState(destPath);
+  // pi.exec kills the child only through child.signal: a cancelled child that had not ended is aborted.
+  if (child.signal.aborted && end?.outcome !== "completed") return { outcome: "aborted", executionRef };
+  const terminal: SpawnChildTerminal = end ?? {
+    outcome: "errored",
+    diagnostic: open > 0
+      ? `Pi Spawn child exited while ${open} of its own children had not arrived`
+      : "Pi Spawn child exited without a final reply",
   };
-}
-
-function childProcessDiagnostic(result: { stderr: string; code: number }): string {
+  if (result.code === 0) return { ...terminal, executionRef };
+  // A failed exit says why; a completed child keeps its memory.
   const stderr = result.stderr.trim();
-  return stderr.length > 0 ? stderr : `Pi child exited with code ${result.code}`;
-}
-
-function clipSpawnDiagnostic(text: string): string {
-  return text.length <= 1200 ? text : text.slice(0, 1200);
+  const exit = stderr.length > 0 ? stderr : `Pi child exited with code ${result.code}`;
+  return { ...terminal, diagnostic: terminal.diagnostic === undefined ? exit : `${terminal.diagnostic}; ${exit}`, executionRef };
 }
 
 const CONTROL_TOOLS = ["spine_open", "spine_close", "spine_next"] as const;
@@ -1200,17 +1154,6 @@ function controlToolAdmission(
     enteredArrivals(ctx),
     slot.current.lifecycle.responseCalls,
   );
-  return reason === null ? undefined : { block: true, reason };
-}
-
-/** A child returns its memory only after its own spawned children have arrived. */
-function childReturnAdmission(
-  slot: MutableSessionSlot,
-  ctx: ExtensionContext,
-  toolName: string,
-): { block: true; reason: string } | undefined {
-  if (toolName !== SPINE_CHILD_RETURN_TOOL || slot.current === null) return undefined;
-  const reason = childReturnRefusal(slot.current.latestContext.projection, enteredArrivals(ctx));
   return reason === null ? undefined : { block: true, reason };
 }
 
@@ -1284,9 +1227,10 @@ function launchChildren(
 }
 
 /**
- * After a restart no child of this session is running. A child that already
- * returned is delivered from its own session record without running again; one
- * that did not return awaits a recovery decision, and without a UI is abandoned.
+ * After a restart no child of this session is running. Each child's newest
+ * session is read as its first attempt, without running again: one that
+ * ended arrives as it ended, one that did not arrives aborted. Both failures
+ * await a recovery decision, and without a UI are abandoned.
  */
 async function recoverChildren(
   pi: ExtensionAPI,
@@ -1301,12 +1245,7 @@ async function recoverChildren(
   const recovery = spawnRecoveryPolicy(ctx, pi);
   for (const [index, birth] of births.entries()) {
     const ref = refs[index]!;
-    const returned = await readChildReturn(scope, ref);
-    if (returned.memory !== null) {
-      session.children.redeliver(toArrival(birth.producer, { outcome: "completed", memory: returned.memory }));
-      continue;
-    }
-    const latest = returned.latest;
+    const latest = await latestChildSession(scope, ref);
     const sessionIds = new Map<number, string>();
     session.children.start(birth, (signal) => runSpawnChild({
       producer: birth.producer,
@@ -1316,17 +1255,20 @@ async function recoverChildren(
       executor: {
         async execute(task, child) {
           if (child.mode === "initial") {
+            const terminal: SpawnChildTerminal = (latest === null ? null : readChildState(latest.path).terminal) ??
+              { outcome: "aborted", diagnostic: "the parent session restarted before this child returned" };
+            // The birth prefix is not kept outside the child session, so a restarted child can only be continued.
             return {
-              outcome: "aborted",
-              diagnostic: "the parent session restarted before this child returned",
+              ...terminal,
               recovery: latest === null
                 ? { continueable: false, retryable: false, reason: "no child session was saved" }
                 : { continueable: true, retryable: false },
             };
           }
+          // Continue is offered only for a saved session.
           return executePiChild(pi, ctx, scope, ref, null, [], task, {
             ...child,
-            attempt: (latest?.attempt ?? 0) + child.attempt,
+            attempt: latest!.attempt + child.attempt,
           }, sessionIds, childInvocation);
         },
       },

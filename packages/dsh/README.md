@@ -48,12 +48,16 @@ loads it as the Cordis plugin `spinejit`.
   (headless, for one) waits for it. Its seed is the parent's log just before
   the sampling whose Spawn bore it (session id `<parent>:spawn:<node>`). The
   step after a Spawn commits starts once its children are established. A
-  child gets its assignment as a user message and ends by calling
-  `spine_child_return` once, after its own children have arrived. It is
-  judged each time it goes idle after a turn of its own: returned is
-  completed, cancelled by its parent is aborted, and idle with every child of
-  its own joined but no return is errored. A child DSH refuses to start, as
-  past the active subagent limit, arrives errored with DSH's reason.
+  child gets its assignment as a user message; its last reply is what it
+  returns. It is judged each time it goes idle after a turn of its own, by
+  the SDK's `childState` over its own log (the events after its
+  inherited prefix): with every child of its own arrived, a last reply is
+  completed with that memory and a turn that ended on a model error is
+  errored with DSH's failure message; cancelled by its parent is aborted;
+  idle with every child of its own arrived but neither is errored. After a
+  restart the same rule reads the child's persisted log, and a child it
+  does not end arrives aborted. A child DSH refuses to start, as past the
+  active subagent limit, arrives errored with DSH's reason.
 - An arrival is a user message the parent receives once, while its birth is
   open; it wakes the parent unless the parent was stopped. It is handed over
   on the child's idle, before DSH releases the child, so a host never sees

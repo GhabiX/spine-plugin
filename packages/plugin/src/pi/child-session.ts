@@ -10,10 +10,11 @@ import {
   type SessionEntry,
 } from "@earendil-works/pi-coding-agent";
 
-import { SPINE_CHILD_RETURN_TOOL } from "@spinejit/spine-sdk/host";
+import { childState, type ChildLogItem } from "@spinejit/spine-sdk/host";
 
 import { buildPiReplayPlan } from "./recovery.js";
-import type { PiAgentMessage } from "./messages.js";
+import { isPiHostSystemMessage, sourceObservation, type PiAgentMessage } from "./messages.js";
+import type { SpawnAcceptedDetails } from "./spawn-view.js";
 
 export interface ChildSessionScope {
   /** The parent Pi session id; birth ids are unique only within it. */
@@ -52,78 +53,56 @@ function childSessionDir(scope: ChildSessionScope): string {
   return join(root, safeSegment(scope.parentSessionId));
 }
 
-/**
- * The child's own durable result: the memory of the latest attempt that
- * returned, or null when no attempt returned. `latest` is the newest attempt's
- * session file, if any.
- */
-export async function readChildReturn(
+/** The newest attempt's session file of a child, or null when none was saved. */
+export async function latestChildSession(
   scope: ChildSessionScope,
   birth: ChildBirthRef,
-): Promise<{ memory: string | null; latest: { path: string; attempt: number } | null }> {
+): Promise<{ path: string; attempt: number } | null> {
   const stem = childSessionStem(birth).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const pattern = new RegExp(`^${stem}(?:\\.attempt-(\\d+))?\\.jsonl$`);
   let names: string[];
   try {
     names = await readdir(childSessionDir(scope));
-  } catch {
-    return { memory: null, latest: null };
+  } catch (cause) {
+    // The directory is made with the first child session of this parent.
+    if ((cause as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw cause;
   }
-  const attempts = names
+  return names
     .map((name) => ({ name, match: pattern.exec(name) }))
     .filter((item) => item.match !== null)
     .map((item) => ({ path: join(childSessionDir(scope), item.name), attempt: Number(item.match![1] ?? 0) }))
-    .sort((left, right) => left.attempt - right.attempt);
-  let memory: string | null = null;
-  for (const attempt of attempts) {
-    const accepted = acceptedChildReturns(await readFile(attempt.path, "utf8"));
-    if (accepted.length === 1) memory = accepted[0]!;
-  }
-  return { memory, latest: attempts.at(-1) ?? null };
+    .sort((left, right) => left.attempt - right.attempt)
+    .at(-1) ?? null;
 }
 
 /**
- * The memories a child's session accepted as its typed return: each
- * spine_child_return call whose own tool result succeeded. A call the
- * child's admission blocked has an error result and returns nothing.
+ * Where a child stands, read from its session file by the Spawn end rule over
+ * what the child itself wrote: its active branch past the birth prefix, whose
+ * length the header records.
  */
-export function acceptedChildReturns(sessionJsonl: string): string[] {
-  const calls = new Map<string, string>();
-  const accepted: string[] = [];
-  for (const line of sessionJsonl.split("\n")) {
-    if (line.trim().length === 0) continue;
-    let entry: unknown;
-    try {
-      entry = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    const message = isRecord(entry) && entry.type === "message" && isRecord(entry.message) ? entry.message : null;
-    if (message === null) continue;
-    if (message.role === "assistant" && Array.isArray(message.content)) {
-      for (const item of message.content) {
-        if (
-          isRecord(item) && item.type === "toolCall" && item.name === SPINE_CHILD_RETURN_TOOL &&
-          typeof item.id === "string" && isRecord(item.arguments) &&
-          typeof item.arguments.memory === "string" && item.arguments.memory.trim().length > 0
-        ) {
-          calls.set(item.id, item.arguments.memory);
-        }
-      }
-    }
-    if (
-      message.role === "toolResult" && message.toolName === SPINE_CHILD_RETURN_TOOL &&
-      message.isError === false && typeof message.toolCallId === "string"
-    ) {
-      const memory = calls.get(message.toolCallId);
-      if (memory !== undefined) accepted.push(memory);
-    }
-  }
-  return accepted;
+export function readChildState(path: string): ReturnType<typeof childState> {
+  const session = SessionManager.open(path);
+  const { inheritedEntryCount } = session.getHeader() as unknown as { inheritedEntryCount: number };
+  return childState(session.getBranch().slice(inheritedEntryCount).flatMap((entry) =>
+    // System messages and summaries are the host's bookkeeping, not the child's conversation.
+    sessionEntryToContextMessages(entry).filter((message) =>
+      !isPiHostSystemMessage(message) && message.role !== "compactionSummary" && message.role !== "branchSummary")
+      .map((message) => childLogItem(message as PiAgentMessage))));
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
+function childLogItem(message: PiAgentMessage): ChildLogItem {
+  if (message.role === "assistant" && message.stopReason === "error") {
+    // Pi's AssistantMessage leaves errorMessage optional.
+    return { type: "error", message: (message.errorMessage as string | undefined) ?? "the model request ended with stopReason error" };
+  }
+  if (message.role === "toolResult" && message.toolName === "spine_spawn" && !message.isError) {
+    return { type: "spawn", births: (message.details as SpawnAcceptedDetails).tasks.length };
+  }
+  const { character } = sourceObservation(message, 0);
+  if (character.type === "arrival") return { type: "arrival" };
+  if (character.type === "message" && character.role === "reply") return { type: "reply", text: character.content };
+  return { type: "other" };
 }
 
 export async function writeChildPrefixSession(options: {
@@ -140,6 +119,8 @@ export async function writeChildPrefixSession(options: {
     id,
     timestamp: new Date().toISOString(),
     cwd: options.cwd,
+    // Where the child's own entries begin: readChildState reads past it.
+    inheritedEntryCount: options.entries.length,
   };
   if (options.parentSession !== undefined) {
     header.parentSession = options.parentSession;
@@ -219,7 +200,7 @@ export function buildChildContinuation(guidance?: string, fallbackAssignment?: s
     ? ""
     : `\n\nThe original assignment was not present in the active session context. Use the following only to restore task context; inspect the existing state first and do not repeat work that is already complete.\n\nAssignment context:\n${fallbackAssignment}`;
   const note = guidance === undefined ? "" : `\n\nUser guidance:\n${guidance}`;
-  return `The previous execution attempt did not complete the assigned work. Continue the same active branch from the existing session history. Inspect the current state, finish the assignment, and call ${SPINE_CHILD_RETURN_TOOL} exactly once with the complete terminal memory. Do not start a new branch or repeat work that is already complete.${fallback}${note}`;
+  return `The previous execution attempt did not complete the assigned work. Continue the same active branch from the existing session history. Inspect the current state, finish the assignment, and end with a final reply that holds the complete terminal memory. Do not start a new branch or repeat work that is already complete.${fallback}${note}`;
 }
 
 function sessionEntryContainsText(entry: SessionEntry, text: string): boolean {

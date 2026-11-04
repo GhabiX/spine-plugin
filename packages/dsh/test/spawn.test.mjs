@@ -9,7 +9,6 @@ import { arrival, call, memory, node, shown, staged } from "./shown.mjs";
 const X = "session-1:spawn:1.1.1";
 const Y = "session-1:spawn:1.1.2";
 const spawnXY = [["spine_spawn", { tasks: [{ summary: "X", prompt: "find x" }, { summary: "Y", prompt: "find y" }] }]];
-const returns = (memory) => [["spine_child_return", { memory }]];
 
 function gate() {
   let open;
@@ -37,8 +36,8 @@ test("children start from the log before the Spawn; each arrival wakes the paren
   const [x, y] = [gate(), gate()];
   const dsh = await mountDsh({
     "session-1": [[["spine_open", { goal: "A" }]], spawnXY, "waiting", "got x", [["spine_close", { memory: "m" }]], "done"],
-    [X]: [x.after(returns("x is 42"))],
-    [Y]: [y.after(returns("y is 7"))],
+    [X]: [x.after("x is 42")],
+    [Y]: [y.after("y is 7")],
   });
   try {
     const agent = await dsh.run("start");
@@ -80,7 +79,7 @@ test("children start from the log before the Spawn; each arrival wakes the paren
   }
 });
 
-test("Close and a child's return wait for their children; a child that ends without returning arrives errored", async () => {
+test("Close and a child's end wait for their children: a reply before they arrive does not end it", async () => {
   const [x1, y] = [gate(), gate()];
   const dsh = await mountDsh({
     "session-1": [
@@ -89,11 +88,11 @@ test("Close and a child's return wait for their children; a child that ends with
     ],
     [X]: [
       [["spine_spawn", { tasks: [{ summary: "X1", prompt: "a" }, { summary: "X2", prompt: "b" }] }]],
-      (request) => { x1.open(); return returns("too early"); },
-      ...afterArrivals(2, returns("x after X1 and X2")),
+      () => { x1.open(); return "too early"; },
+      ...afterArrivals(2, "x after X1 and X2"),
     ],
-    [`${X}:spawn:1.1.1`]: [x1.after(returns("x1"))],
-    [`${X}:spawn:1.1.2`]: [x1.after(returns("x2"))],
+    [`${X}:spawn:1.1.1`]: [x1.after("x1")],
+    [`${X}:spawn:1.1.2`]: [x1.after("x2")],
     [Y]: [y.after("I am done")],
   });
   try {
@@ -106,9 +105,6 @@ test("Close and a child's return wait for their children; a child that ends with
     const early = results("session-1")[2];
     assert.equal(early.isError, true);
     assert.match(early.content[0].text, /Spawned children 1\.1\.1 \(X\), 1\.1\.2 \(Y\) have not arrived/);
-    const tooEarly = results(X)[1];
-    assert.equal(tooEarly.isError, true);
-    assert.match(tooEarly.content[0].text, /Spawned children 1\.1\.1 \(X1\), 1\.1\.2 \(X2\) have not arrived/);
 
     const last = requestsOf(dsh, "session-1").at(-1);
     assert.ok(!last.some((line) => line.startsWith("assistant: spine_close")), "the closing sampling folded with the node");
@@ -116,10 +112,28 @@ test("Close and a child's return wait for their children; a child that ends with
     assert.ok(kept > last.indexOf(memory("1.1", "m")) && last.includes(memory("1.1", "m")), "the memory leads what the node keeps");
     assert.deepEqual(last.filter((line) => line.startsWith("user: <spine_arrival")).toSorted(), [
       arrival("1.1.1", "completed", "x after X1 and X2"),
-      arrival("1.1.2", "errored", "the child went idle without calling spine_child_return"),
+      arrival("1.1.2", "completed", "I am done"),
     ]);
     assert.deepEqual(ends(dsh, `${X}:spawn:1.1.1`), ["completed"]);
     assert.deepEqual(await dsh.restored(agent), agent.session.deriveMessages(), "official JSONL restore without Spine");
+  } finally {
+    await dsh.dispose();
+  }
+});
+
+test("a child whose model request fails arrives errored with the failure", async () => {
+  const dsh = await mountDsh({
+    "session-1": [[["spine_open", { goal: "A" }]], spawnXY, ...afterArrivals(2, "noted")],
+    [X]: [{ fail: "403 insufficient balance" }],
+    [Y]: ["y is 7"],
+  });
+  try {
+    const agent = await dsh.run("start");
+    await until(() => requestsOf(dsh, "session-1").at(-1).filter((line) => line.startsWith("user: <spine_arrival")).length === 2 && agent.status === "idle");
+    assert.deepEqual(requestsOf(dsh, "session-1").at(-1).filter((line) => line.startsWith("user: <spine_arrival")).toSorted(), [
+      arrival("1.1.1", "errored", "403 insufficient balance"),
+      arrival("1.1.2", "completed", "y is 7"),
+    ]);
   } finally {
     await dsh.dispose();
   }
@@ -158,16 +172,24 @@ test("stopping the parent stops its children: they arrive aborted and do not wak
   }
 });
 
-test("a restarted parent receives a returned child as completed and a running one as aborted, without waking", async () => {
+test("a restarted parent reads each child's end from its log: none reruns or wakes it", async () => {
+  // X replied, Y runs, Z's request failed, W waits for its own children.
+  const tasks = ["X", "Y", "Z", "W"].map((summary) => ({ summary, prompt: summary.toLowerCase() }));
+  const [Z, W] = ["session-1:spawn:1.1.3", "session-1:spawn:1.1.4"];
   const first = await mountDsh({
-    "session-1": [[["spine_open", { goal: "A" }]], spawnXY, { hang: true }],
-    [X]: [returns("x is 42")],
+    "session-1": [[["spine_open", { goal: "A" }]], [["spine_spawn", { tasks }]], { hang: true }],
+    [X]: ["x is 42"],
     [Y]: [{ hang: true }],
+    [Z]: [{ fail: "403 insufficient balance" }],
+    [W]: [[["spine_spawn", { tasks: [{ summary: "G1", prompt: "g" }, { summary: "G2", prompt: "g" }] }]], "waiting for G1 and G2"],
+    [`${W}:spawn:1.1.1`]: [{ hang: true }],
+    [`${W}:spawn:1.1.2`]: [{ hang: true }],
   });
   let root;
   try {
     const run = first.run("start");
-    await until(() => ends(first, X).length === 1 && requestsOf(first, Y).length === 1 && first.agent.inbox.nextStep.length === 1);
+    await until(() => ends(first, X).length === 1 && ends(first, Z).length === 1 && ends(first, W).length === 1 &&
+      requestsOf(first, Y).length === 1 && requestsOf(first, `${W}:spawn:1.1.2`).length === 1 && first.agent.inbox.nextStep.length === 2);
     root = first.root;
     void run.catch(() => {});
   } finally {
@@ -177,19 +199,45 @@ test("a restarted parent receives a returned child as completed and a running on
   const dsh = await mountDsh(["noted"], { root });
   try {
     const agent = await dsh.resume("session-1");
-    await until(() => agent.inbox.nextStep.length === 2);
+    await until(() => agent.inbox.nextStep.length === 4);
     await new Promise((resolve) => setTimeout(resolve, 100));
     assert.equal(dsh.adapter.requests.length, 0, "recovered arrivals do not wake the parent");
-    assert.equal(agent.inbox.nextStep.length, 2, "each birth arrives once");
+    assert.equal(agent.inbox.nextStep.length, 4, "each birth arrives once");
     await dsh.send(agent, "continue");
     const [request] = dsh.adapter.requests.map(shown);
-    assert.equal(request.filter((line) => line.startsWith("user: <spine_arrival")).length, 2);
-    assert.deepEqual(request.slice(-3).toSorted(), [
+    assert.deepEqual(request.filter((line) => line.startsWith("user: <spine_arrival")).toSorted(), [
       arrival("1.1.1", "completed", "x is 42"),
       arrival("1.1.2", "aborted", "the parent session restarted before this child returned"),
-      "user: [U2]\ncontinue",
-    ].toSorted());
+      arrival("1.1.3", "errored", "403 insufficient balance"),
+      arrival("1.1.4", "aborted", "the parent session restarted before this child returned"),
+    ]);
+    assert.equal(request.at(-1), "user: [U2]\ncontinue");
     assert.deepEqual(await dsh.restored(agent), agent.session.deriveMessages(), "official JSONL restore without Spine");
+  } finally {
+    await dsh.dispose();
+  }
+});
+
+test("a reply after a cut-off step in the same turn still ends the child", async () => {
+  const [G1, G2] = [`${X}:spawn:1.1.1`, `${X}:spawn:1.1.2`];
+  const dsh = await mountDsh({
+    "session-1": [[["spine_open", { goal: "A" }]], spawnXY, ...afterArrivals(2, "noted")],
+    // G1's and G2's arrivals are steered into X's turn while a cut-off step runs; X replies in the same turn.
+    [X]: [
+      [["spine_spawn", { tasks: [{ summary: "G1", prompt: "g" }, { summary: "G2", prompt: "g" }] }]],
+      async () => { await until(() => ends(dsh, G1).length === 1 && ends(dsh, G2).length === 1); return { text: "partial", finish: "max-tokens" }; },
+      "x final",
+    ],
+    [Y]: ["y is 7"],
+    [G1]: ["g1"],
+    [G2]: ["g2"],
+  });
+  try {
+    const agent = await dsh.run("start");
+    const arrivals = () => requestsOf(dsh, "session-1").at(-1).filter((line) => line.startsWith("user: <spine_arrival"));
+    await until(() => arrivals().length === 2 && agent.status === "idle");
+    assert.deepEqual(ends(dsh, X), ["max-tokens"], "the turn keeps its cut-off end reason");
+    assert.deepEqual(arrivals().toSorted(), [arrival("1.1.1", "completed", "x final"), arrival("1.1.2", "completed", "y is 7")]);
   } finally {
     await dsh.dispose();
   }
@@ -200,17 +248,17 @@ test("a child forked while earlier births are pending leaves them to its parent"
   const spawnZW = [["spine_spawn", { tasks: [{ summary: "Z", prompt: "find z" }, { summary: "W", prompt: "find w" }] }]];
   const dsh = await mountDsh({
     "session-1": [[["spine_open", { goal: "A" }]], spawnXY, spawnZW, ...afterArrivals(4, [["spine_close", { memory: "m" }]], "done")],
-    [X]: [later.after(returns("x"))],
-    [Y]: [later.after(returns("y"))],
-    "session-1:spawn:1.1.3": [returns("z")],
-    "session-1:spawn:1.1.4": [returns("w")],
+    [X]: [later.after("x")],
+    [Y]: [later.after("y")],
+    "session-1:spawn:1.1.3": ["z"],
+    "session-1:spawn:1.1.4": ["w"],
   });
   try {
     const agent = await dsh.run("start");
     await until(() => ends(dsh, "session-1:spawn:1.1.3").length === 1 && ends(dsh, "session-1:spawn:1.1.4").length === 1);
     for (const id of ["session-1:spawn:1.1.3", "session-1:spawn:1.1.4"]) {
       const requests = requestsOf(dsh, id);
-      assert.equal(requests.length, 1, "the child returns at once: X and Y are its parent's to join");
+      assert.equal(requests.length, 1, "the child ends at once: X and Y are its parent's to join");
       assert.equal(requests[0].filter((line) => line.startsWith("user: <spine_arrival")).length, 0);
     }
     later.open();
@@ -231,8 +279,8 @@ test("a headless run ends only after the parent has taken its children's arrival
   const later = (reply) => () => new Promise((resolve) => setTimeout(() => resolve(reply), 50));
   const dsh = await mountDsh({
     "session-1": [[["spine_open", { goal: "A" }]], spawnXY, "waiting", ...afterArrivals(2, [["spine_close", { memory: "m" }]], "x is 42, y is 7")],
-    [X]: [later(returns("x is 42"))],
-    [Y]: [later(returns("y is 7"))],
+    [X]: [later("x is 42")],
+    [Y]: [later("y is 7")],
   });
   try {
     const agent = await dsh.runHeadless("start");

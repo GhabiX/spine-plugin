@@ -1,21 +1,21 @@
 import type { Context } from "@deepseek-ai/cordis";
 import type { Agent } from "@deepseek-ai/dsh-agent";
-import { buildForkSeed, SessionId, SessionSeq, type SessionEvent } from "@deepseek-ai/dsh-session";
+import { buildForkSeed, isAppendSurfaceEvent, SessionId, SessionSeq, type SessionEvent } from "@deepseek-ai/dsh-session";
 import type {} from "@deepseek-ai/dsh-session-persistence";
 import type { SubagentActivation, SubagentProvider } from "@deepseek-ai/dsh-subagent";
-import type { ToolDefinition } from "@deepseek-ai/dsh-tools";
 import type { SpawnArrival, SpawnTask } from "@spinejit/spine-sdk";
 import {
-  SPINE_CHILD_RETURN_TOOL,
+  childState,
   spineChildAssignmentText,
   toArrival,
+  type ChildLogItem,
   type SpawnBirth,
   type SpawnChildren,
   type SpawnChildTerminal,
 } from "@spinejit/spine-sdk/host";
 
 import type { SpineAgent } from "./agent.js";
-import { SpineDshError } from "./events.js";
+import { sourceCharacter, surfaceRole } from "./events.js";
 
 /** The subagent provider every Spawn child runs under. */
 export const SPINE_SUBAGENT_PROVIDER = "spine";
@@ -36,19 +36,32 @@ export function childSessionId(parent: string, producer: readonly number[]): Ses
   return SessionId(`${parent}:spawn:${producer.join(".")}`);
 }
 
-/** The memory each spine_child_return call in a child's log returned, when its result was not an error. */
-export function childReturns(events: readonly SessionEvent[]): string[] {
-  const calls = new Map<string, string>();
-  const accepted: string[] = [];
+/**
+ * A child's own log, the events after its inherited prefix, as the Spawn end
+ * rule reads it: its source messages, as the Spine core observes them, and
+ * the failed requests that end a turn. A cut-off response is no reply
+ * already; the turn's end reason adds nothing to it.
+ */
+function* childLog(events: readonly SessionEvent[]): Generator<ChildLogItem> {
+  const spawns = new Map<string, string>();
   for (const event of events) {
-    if (event.type === "tool/call" && event.data.name === SPINE_CHILD_RETURN_TOOL) {
-      calls.set(event.data.callId, event.data.arguments);
-    } else if (event.type === "tool/result" && event.data.message.isError !== true) {
-      const call = calls.get(event.data.message.toolCallId);
-      if (call !== undefined) accepted.push((JSON.parse(call) as { memory: string }).memory);
+    if (event.type === "tool/call" && event.data.name === "spine_spawn") {
+      spawns.set(event.data.callId, event.data.arguments);
+    } else if (event.type === "turn/end" && event.data.reason.kind === "error") {
+      yield { type: "error", message: event.data.reason.error.message };
+    } else if (isAppendSurfaceEvent(event) && surfaceRole(event) === "source") {
+      if (event.type === "tool/result") {
+        // A Spawn call whose result succeeded passed admission, so its arguments decode.
+        const call = event.data.message.isError === true ? undefined : spawns.get(event.data.message.toolCallId);
+        yield call === undefined ? { type: "other" } : { type: "spawn", births: (JSON.parse(call) as { tasks: unknown[] }).tasks.length };
+        continue;
+      }
+      const character = sourceCharacter(event);
+      if (character.type === "arrival") yield { type: "arrival" };
+      else if (character.type === "message" && character.role === "reply") yield { type: "reply", text: character.content };
+      else yield { type: "other" };
     }
   }
-  return accepted;
 }
 
 /**
@@ -68,11 +81,11 @@ export function spineSubagentProvider(starting: ReadonlyMap<string, readonly Ses
 /**
  * One Spawn child: a subagent forked from its parent's log just before the
  * sampling that bore it, given its assignment. It is judged each time it goes
- * idle after a turn of its own: it arrives once it has returned its memory,
- * has every child of its own joined and no return, or its parent cancelled
- * it. The arrival is handed over on that idle, before the manager can release
- * the child, so a host that waits for its subagents never sees the parent
- * done with an arrival still to come.
+ * idle after a turn of its own: it arrives once its log ends it, its parent
+ * cancelled it, or it has every child of its own joined and its log still
+ * does not end it. The arrival is handed over on that idle, before the
+ * manager can release the child, so a host that waits for its subagents
+ * never sees the parent done with an arrival still to come.
  */
 export async function executeChild(
   world: SpineWorld,
@@ -96,15 +109,11 @@ export async function executeChild(
     arrived(result);
   };
   world.idle.set(id, () => {
-    const events = world.agents.get(id)!.agent.session.ownEvents();
-    if (!events.some((event) => event.type === "turn/end")) return;
-    const memory = childReturns(events)[0];
-    if (memory !== undefined) end({ outcome: "completed", memory });
-    else if (signal.aborted) end({ outcome: "aborted" });
+    const { open, terminal } = childState(childLog(world.agents.get(id)!.agent.session.ownEvents()));
+    if (signal.aborted && terminal?.outcome !== "completed") end({ outcome: "aborted" });
+    else if (terminal !== null) end(terminal);
     // An open birth's arrival is still to come, and it wakes the child.
-    else if (world.agents.get(id)!.openBirths().length === 0) {
-      end({ outcome: "errored", diagnostic: `the child went idle without calling ${SPINE_CHILD_RETURN_TOOL}` });
-    }
+    else if (open === 0) end({ outcome: "errored", diagnostic: "the child went idle without a final reply" });
   });
   // Cancelling an idle child starts no turn, so it arrives at once. A child
   // still being started is cancelled by the manager, through the same signal.
@@ -141,9 +150,8 @@ export async function executeChild(
 }
 
 /**
- * After a restart no child runs. A child whose log returned its memory
- * arrives completed; every other open birth arrives aborted. Neither wakes
- * the agent.
+ * After a restart no child runs. A child whose log ends it arrives as it
+ * ended; every other open birth arrives aborted. None wakes the agent.
  */
 export async function recoverChildren(
   world: SpineWorld,
@@ -153,49 +161,16 @@ export async function recoverChildren(
 ): Promise<void> {
   for (const birth of births) {
     const id = childSessionId(parent.id, birth.producer);
-    let memory: string | undefined;
+    let terminal: SpawnChildTerminal | null = null;
     if ((await world.ctx.sessionPersistence.stat(id)) !== undefined) {
       const handle = await world.ctx.sessionPersistence.open(id, "read");
       try {
-        memory = childReturns((await handle.read()).events)[0];
+        terminal = childState(childLog((await handle.read()).events.slice(handle.inheritedEventCount))).terminal;
       } finally {
         await handle.close();
       }
     }
-    children.redeliver(toArrival(birth.producer, memory === undefined
-      ? { outcome: "aborted", diagnostic: "the parent session restarted before this child returned" }
-      : { outcome: "completed", memory }));
+    children.redeliver(toArrival(birth.producer, terminal
+      ?? { outcome: "aborted", diagnostic: "the parent session restarted before this child returned" }));
   }
-}
-
-/** The child's return: accepted once, after the child's own children have arrived; it ends the turn. */
-export function returnTool(agents: ReadonlyMap<string, SpineAgent>): ToolDefinition {
-  let returned = false;
-  return {
-    name: SPINE_CHILD_RETURN_TOOL,
-    description: "Return the complete model-authored terminal memory for this Spawn child.",
-    parameters: {
-      type: "object",
-      properties: { memory: { type: "string", minLength: 1 } },
-      required: ["memory"],
-      additionalProperties: false,
-    },
-    output: {
-      schema: { type: "object", properties: { accepted: { type: "boolean" } }, required: ["accepted"] },
-      render: () => [{ type: "text", text: "Spine child memory accepted" }],
-    },
-    async execute(_args, exec) {
-      if (exec.parent !== undefined) {
-        throw new SpineDshError(`${SPINE_CHILD_RETURN_TOOL} must be called by the model directly, not from code`);
-      }
-      if (returned) throw new SpineDshError("this child already returned its memory");
-      const spine = exec.agent === undefined ? undefined : agents.get(exec.agent.id);
-      if (spine === undefined) throw new SpineDshError(`${SPINE_CHILD_RETURN_TOOL} was called outside a Spine agent`);
-      const refusal = spine.returnRefusal();
-      if (refusal !== null) throw new SpineDshError(refusal);
-      returned = true;
-      exec.concludeTurn();
-      return { accepted: true };
-    },
-  };
 }

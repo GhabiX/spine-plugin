@@ -227,19 +227,19 @@ prefix (`C_child = C_parent · Δ_child`), fixed at birth, by resuming a forked 
 session file named by its birth: the Pi entry of the sampling that bore it plus
 its birth id, since birth ids repeat across the tree branches of one session.
 It then receives an identity/peer assignment envelope. The child process loads the same discovered packages/extensions as a
-normal Pi agent, keeps the parent's active tool allowlist plus typed
-`spine_child_return`, and can use `spine_open` / `spine_close` / `spine_next` /
-`spine_spawn`.
+normal Pi agent, keeps the parent's active tool allowlist, and can use
+`spine_open` / `spine_close` / `spine_next` / `spine_spawn`. It has no return
+tool: as with any subagent, its last reply is what it returns.
 
 Each child's final result returns on its own as an arrival: a custom
 `spine.arrival` message sent with `deliverAs: "steer"`, which starts a turn
 when the agent is idle. The core admits it as an external input at the cursor
 where it arrives, so it stays in context where the model first saw it and is
 kept, with user messages and the agent's replies to the user, in the memory of
-the node that closes over it. A completed arrival carries the child's typed
+the node that closes over it. A completed arrival carries the child's
 memory; an errored or aborted one carries only a diagnostic. `spine_close` and
 `spine_next` are refused while a birth inside the node has not arrived, a child
-cannot return while its own children are running, and compaction is cancelled
+has not ended while its own children are running, and compaction is cancelled
 until every birth has arrived. Stop (an aborted agent run) cancels running
 children; their aborted arrivals do not wake the agent. Without a UI (print and
 JSON modes, and every child) the settled agent waits for a running child, whose
@@ -251,20 +251,30 @@ prefix that may hold births still unarrived; there they are inherited context
 arrivals go only to the session that bore them. An arrival already in the
 copied prefix is part of it, so the birth counts as arrived there too.
 
-A child's result is its `spine_child_return` call whose own tool result
-succeeded, read from the child's session file, live and after a restart alike.
-A call the child's admission refused, because its own children are still
-running, records an error result and is not a result.
+A child's result is read from its own log, live and after a restart alike, by
+one rule every host shares (`childState` in the SDK). The log is the
+conversation the child wrote after the prefix it inherited; system messages
+and compaction or branch summaries are the host's bookkeeping and not part of
+it. The rule gives how many children of its own have not arrived and, once
+none has, its end: a last reply (the core's reply: it stopped by itself, with
+text and no tool call) is its memory, a last failed model request is errored
+with its error text (Pi's `errorMessage`). Anything else, such as a reply
+followed by an arrival it has not answered, or a cut-off response, has not
+ended. In Pi the log is the child session's active branch past the prefix,
+whose entry count the session header records (`inheritedEntryCount`). A child
+that exits without an end arrives errored, saying how many of its own children
+had not arrived or that it left no final reply; a nonzero exit adds its stderr
+to any end.
 
 With a UI, a failed child enters a per-child recovery prompt: `Continue` reuses
 the same child session history, `Retry` starts a new attempt from the birth
 prefix, and `Abandon` delivers the failure. `Continue` first validates the
 existing session header, identity, and active branch through Pi's session
-loader and Spine replay preflight. If the parent restarts, a child that had
-already called `spine_child_return` is redelivered from its own session file
-without running again; one that had not is offered `Continue` or `Abandon`
-(only `Abandon` without a UI), since the birth prefix is not kept outside the
-child session.
+loader and Spine replay preflight. If the parent restarts, each child's newest
+session file is read as its first attempt, without running again: a child that
+had ended arrives as it ended, one that had not arrives aborted. Either failure
+is offered `Continue` or `Abandon` (only `Abandon` without a UI), since the
+birth prefix is not kept outside the child session.
 
 An arrival is held until it is in the session. After a Stop, Pi drops queued
 steering messages, so the held arrivals that never reached the session are

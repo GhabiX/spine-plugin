@@ -409,30 +409,6 @@ test("Spine leaves the provider transcript to Pi", async () => {
   assert.equal(await pi.emit("context_with_system", { messages: [] }, extensionContext().context), undefined);
 });
 
-test("child mode keeps ordinary tools, Spine tree tools, nested spawn, and typed return", async () => {
-  const pi = mockPi();
-  createPiExtension()(pi.api);
-  assert.equal(pi.tools.has("spine_child_return"), false);
-  pi.setChildFlag(true);
-  await pi.emit(
-    "session_start",
-    { type: "session_start", reason: "new" },
-    extensionContext().context,
-  );
-  assert.equal(pi.tools.has("spine_child_return"), true);
-  assert.deepEqual(pi.api.activeTools, [
-    "read",
-    "bash",
-    "edit",
-    "write",
-    "spine_open",
-    "spine_close",
-    "spine_next",
-    "spine_spawn",
-    "spine_child_return",
-  ]);
-});
-
 test("before_agent_start extends a prompt an earlier extension already replaced", async () => {
   const pi = mockPi();
   const ctx = extensionContext();
@@ -811,36 +787,23 @@ test("a model request while the prior sampling is still open faults", async () =
   assert.match(faults[0].data.errors.at(-1).message, /before the prior turn ended/);
 });
 
-/** A child process that returned `memory`: Pi recorded the call and its result in the child's session. */
-async function childReturn(args, memory) {
-  await appendChildEntries(args[args.indexOf("--session") + 1], returnEntries(memory));
-  return { stdout: "", stderr: "", code: 0, killed: false };
+/** A child process that ended with `last`, its final message, recorded after its assignment in its session. */
+async function childEnded(args, last, exit = { stderr: "", code: 0 }) {
+  await appendChildEntries(args[args.indexOf("--session") + 1], [user(args.at(-1)), last]);
+  return { stdout: "", ...exit, killed: false };
 }
 
+const childReply = (args, text) => childEnded(args, assistant([{ type: "text", text }], "stop"));
+
+/** Appends messages to a child session as Pi does: each entry follows the last. */
 async function appendChildEntries(path, messages) {
-  await appendFile(path, messages.map((message) => `${JSON.stringify({ type: "message", message })}\n`).join(""));
-}
-
-/** A child's typed return as Pi records it: the call, then its tool result. */
-function returnEntries(memory, isError = false) {
-  return [
-    {
-      role: "assistant",
-      content: [{ type: "toolCall", id: "return-1", name: "spine_child_return", arguments: { memory } }],
-      api: "test", provider: "test", model: "test",
-      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-      stopReason: "toolUse",
-      timestamp: 2,
-    },
-    {
-      role: "toolResult",
-      toolCallId: "return-1",
-      toolName: "spine_child_return",
-      content: [{ type: "text", text: isError ? "blocked" : "Spine child memory accepted" }],
-      isError,
-      timestamp: 3,
-    },
-  ];
+  let parentId = JSON.parse((await readFile(path, "utf8")).trim().split("\n").at(-1)).id ?? null;
+  const lines = messages.map((message) => {
+    const entry = { type: "message", id: `c${recordedEntries++}`, parentId, timestamp: "2026-11-04T12:00:00.000Z", message };
+    parentId = entry.id;
+    return `${JSON.stringify(entry)}\n`;
+  });
+  await appendFile(path, lines.join(""));
 }
 
 
@@ -863,15 +826,16 @@ function recordBranch(pi) {
     const result = await emit(name, event, ctx);
     if (name === "message_end") {
       const message = structuredClone(event.message);
+      const parentId = branch.at(-1)?.id ?? null;
       branch.push(message.role === "custom"
-        ? { type: "custom_message", id: `e${recordedEntries++}`, customType: message.customType, content: message.content, display: message.display, details: message.details }
-        : { type: "message", id: `e${recordedEntries++}`, message });
+        ? { type: "custom_message", id: `e${recordedEntries++}`, parentId, customType: message.customType, content: message.content, display: message.display, details: message.details }
+        : { type: "message", id: `e${recordedEntries++}`, parentId, message });
     }
     return result;
   };
   const appendEntry = pi.api.appendEntry;
   pi.api.appendEntry = (customType, data) => {
-    branch.push({ type: "custom", id: `e${recordedEntries++}`, customType, data: structuredClone(data) });
+    branch.push({ type: "custom", id: `e${recordedEntries++}`, parentId: branch.at(-1)?.id ?? null, customType, data: structuredClone(data) });
     appendEntry(customType, data);
   };
   return branch;
@@ -929,7 +893,7 @@ test("Spawn returns at once; children start after the commit and each arrives on
   const invocations = [];
   pi.api.exec = async (command, args) => {
     invocations.push({ command, args });
-    return childReturn(args, args.at(-1).includes("You are: alpha") ? "alpha memory" : "beta memory");
+    return childReply(args, args.at(-1).includes("You are: alpha") ? "alpha memory" : "beta memory");
   };
   createPiExtension()(pi.api);
   await pi.emit("session_start", { type: "session_start", reason: "new" }, ctx.context);
@@ -958,6 +922,7 @@ test("Spawn returns at once; children start after the commit and each arrives on
   assert.equal(alpha.command, invocation.command);
   assert.ok(alpha.args.includes("--spine-child=true"));
   assert.ok(alpha.args.includes(`--spine-parent-pid=${process.pid}`));
+  assert.equal(alpha.args[alpha.args.indexOf("--tools") + 1], pi.api.getActiveTools().join(","), "the child runs with its parent's active tools");
   assert.match(alpha.args.at(-1), /^- beta$/m);
   const sessionPath = alpha.args[alpha.args.indexOf("--session") + 1];
   const origin = branch.find((entry) => entry.message === spawnCall || entry.message?.content?.[0]?.id === spawn.id).id;
@@ -1003,7 +968,7 @@ test("Spawn returns at once; children start after the commit and each arrives on
   assert.deepEqual([...order].sort((a, b) => a - b), order);
 });
 
-test("after a restart a returned child is redelivered without running, an unreturned one is abandoned", async () => {
+test("after a restart a child that ended is read back without running, a running one is abandoned", async () => {
   const dir = await mkdtemp(join(tmpdir(), "pi-spine-spawn-restart-"));
   const sessionFile = join(dir, "parent.jsonl");
   const pi = mockPi();
@@ -1022,9 +987,9 @@ test("after a restart a returned child is redelivered without running, an unretu
   await pi.emit("message_end", { type: "message_end", message: user("request") }, ctx.context);
   await sample(pi, ctx, [{ id: "spawn-1", name: "spine_spawn", input: { tasks: SPAWN_TASKS } }]);
   await until(() => started === 2);
-  // The parent dies before either arrival is admitted; alpha had written its return.
+  // The parent dies before either arrival is admitted; alpha had written its final reply.
   const origin = branch.find((entry) => entry.message?.content?.[0]?.id === "spawn-1").id;
-  await appendChildEntries(join(dir, "spine-spawn", "pi-restart", `${origin}.1.1.jsonl`), returnEntries("alpha memory"));
+  await appendChildEntries(join(dir, "spine-spawn", "pi-restart", `${origin}.1.1.jsonl`), [assistant([{ type: "text", text: "alpha memory" }], "stop")]);
   await pi.emit("session_shutdown", { type: "session_shutdown", reason: "quit" }, ctx.context);
   release({ stdout: "", stderr: "", code: 0, killed: false });
 
@@ -1072,7 +1037,7 @@ test("the same birth id on two Pi tree branches names two children", async () =>
   const dir = await mkdtemp(join(tmpdir(), "pi-spine-spawn-branches-"));
   const sessionFile = join(dir, "parent.jsonl");
   const tasks = (tag) => [{ summary: `${tag}1`, prompt: `${tag} first` }, { summary: `${tag}2`, prompt: `${tag} second` }];
-  const exec = async (_command, args) => childReturn(args, args.at(-1).includes("You are: A") ? "A result" : "B result");
+  const exec = async (_command, args) => childReply(args, args.at(-1).includes("You are: A") ? "A result" : "B result");
   async function open(prefix) {
     const pi = mockPi();
     const branch = recordBranch(pi);
@@ -1133,8 +1098,9 @@ test("a spawned child inherits its parent's unarrived births as context, not as 
   createPiExtension()(child.api);
   await child.emit("session_start", { type: "session_start", reason: "new" }, childCtx.context);
   await child.emit("message_end", { type: "message_end", message: user("child assignment") }, childCtx.context);
-  const done = await sample(child, childCtx, [{ id: "return-1", name: "spine_child_return", input: { memory: "child memory" } }]);
-  assert.equal(done.admissions[0], undefined);
+  // Its settled run does not wait: 1.1 and 1.2 are its parent's to join.
+  await sample(child, childCtx, [], "child memory");
+  await child.emit("agent_settled", { type: "agent_settled", aborted: false }, childCtx.context);
   assert.equal(child.sent.length, 0);
   assert.equal(childCtx.aborts, 0);
   await child.emit("session_shutdown", { type: "session_shutdown", reason: "quit" }, childCtx.context);
@@ -1142,30 +1108,32 @@ test("a spawned child inherits its parent's unarrived births as context, not as 
   for (const run of runs) run.resolve({ stdout: "", stderr: "stopped", code: 143, killed: true });
 });
 
-test("a return the child's admission blocked is not its result", async () => {
+test("a child's end comes from its session; Pi's exit status only adds a diagnostic", async () => {
   const pi = mockPi();
   const branch = recordBranch(pi);
-  const ctx = extensionContext("pi-blocked-return", { sessionFile: join(await mkdtemp(join(tmpdir(), "pi-spine-blocked-")), "parent.jsonl"), branch });
-  pi.api.exec = async (_command, args) => {
-    await appendChildEntries(args[args.indexOf("--session") + 1], returnEntries("premature", true));
-    return { stdout: "", stderr: "", code: 0, killed: false };
-  };
+  const ctx = extensionContext("pi-child-error", { sessionFile: join(await mkdtemp(join(tmpdir(), "pi-spine-error-")), "parent.jsonl"), branch });
+  const forbidden = '403 {"error":{"message":"insufficient balance"}}';
+  // alpha's request failed though Pi exited 0; beta replied, then Pi exited 1.
+  pi.api.exec = async (_command, args) => args.at(-1).includes("You are: alpha")
+    ? childEnded(args, { ...assistant([], "error"), errorMessage: forbidden })
+    : childEnded(args, assistant([{ type: "text", text: "beta memory" }], "stop"), { stderr: "late crash", code: 1 });
   createPiExtension()(pi.api);
   await pi.emit("session_start", { type: "session_start", reason: "new" }, ctx.context);
   await pi.emit("message_end", { type: "message_end", message: user("request") }, ctx.context);
   await sample(pi, ctx, [{ id: "spawn-1", name: "spine_spawn", input: { tasks: SPAWN_TASKS } }]);
   await until(() => pi.sent.length === 2);
-  for (const [message] of pi.sent) {
-    assert.equal(message.details.arrival.outcome, "errored");
-    assert.match(message.details.arrival.diagnostic, /accepted 0 typed returns/);
-  }
+  const arrivals = pi.sent.map(([message]) => message.details.arrival).sort((a, b) => a.producer.join(".").localeCompare(b.producer.join(".")));
+  assert.deepEqual(arrivals.map(({ outcome, memory, diagnostic }) => [outcome, memory, diagnostic]), [
+    ["errored", undefined, forbidden],
+    ["completed", "beta memory", "late crash"],
+  ]);
 });
 
 test("after a Stop only the arrivals Pi dropped are handed over again", async () => {
   const pi = mockPi();
   const branch = recordBranch(pi);
   const ctx = extensionContext("pi-redeliver", { sessionFile: join(await mkdtemp(join(tmpdir(), "pi-spine-redeliver-")), "parent.jsonl"), branch });
-  pi.api.exec = async (_command, args) => childReturn(args, args.at(-1).includes("You are: alpha") ? "alpha memory" : "beta memory");
+  pi.api.exec = async (_command, args) => childReply(args, args.at(-1).includes("You are: alpha") ? "alpha memory" : "beta memory");
   createPiExtension()(pi.api);
   await pi.emit("session_start", { type: "session_start", reason: "new" }, ctx.context);
   await pi.emit("message_end", { type: "message_end", message: user("request") }, ctx.context);
@@ -1207,7 +1175,7 @@ test("without a UI the settled agent waits for a running child, whose arrival st
   const waiting = pi.emit("agent_settled", { type: "agent_settled", aborted: false }, ctx.context).then(() => { settled = true; });
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.equal(settled, false);
-  gates[0].resolve(await childReturn(gates[0].args, "first memory"));
+  gates[0].resolve(await childReply(gates[0].args, "first memory"));
   await waiting;
   assert.equal(pi.sent.length, 1);
   assert.deepEqual(pi.sent[0][1], { deliverAs: "steer", triggerTurn: true });

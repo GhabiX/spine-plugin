@@ -29,6 +29,43 @@ export interface SpawnChildTerminal {
   };
 }
 
+/** One message of a Spawn child's own log, as its end is read from it. */
+export type ChildLogItem =
+  /** The core's reply: a response that stopped by itself, with text and no tool call. */
+  | { type: "reply"; text: string }
+  /** A model request that failed, with the error the host recorded. */
+  | { type: "error"; message: string }
+  /** A Spawn call whose tool result succeeded: it bore `births` children. */
+  | { type: "spawn"; births: number }
+  /** A child of its own arrived; each arrives once. */
+  | { type: "arrival" }
+  /** Any other message of its conversation: input, a tool call or result, a cut-off response. */
+  | { type: "other" };
+
+/**
+ * Where a Spawn child stands, read from its own log, live and after a restart
+ * alike. `open` counts the children of its own that have not arrived.
+ * `terminal` is its end, or null while it has none: it ends once none is open
+ * and its last message is a reply, which is the memory it returns, or a
+ * failed request, whose error is its diagnostic.
+ */
+export function childState(log: Iterable<ChildLogItem>): { open: number; terminal: SpawnChildTerminal | null } {
+  let open = 0;
+  let last: ChildLogItem | undefined;
+  for (const item of log) {
+    if (item.type === "spawn") open += item.births;
+    if (item.type === "arrival") open -= 1;
+    last = item;
+  }
+  if (open > 0 || (last?.type !== "reply" && last?.type !== "error")) return { open, terminal: null };
+  return {
+    open,
+    terminal: last.type === "reply"
+      ? { outcome: "completed", memory: last.text }
+      : { outcome: "errored", diagnostic: last.message },
+  };
+}
+
 export interface SpawnExecutor {
   execute(task: SpawnTask, context: SpawnChildContext): Promise<SpawnChildTerminal>;
 }
@@ -136,7 +173,7 @@ export function toArrival(
   }
   const outcome = cancelled ? "aborted" : terminal.outcome === "completed" ? "errored" : terminal.outcome;
   const diagnostic = boundedOrNull(terminal.diagnostic)
-    ?? (cancelled ? "spawn child was cancelled" : "spawn child ended without typed memory");
+    ?? (cancelled ? "spawn child was cancelled" : "spawn child ended without memory");
   return { ...base, outcome, diagnostic };
 }
 

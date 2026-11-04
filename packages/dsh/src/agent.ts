@@ -2,7 +2,6 @@ import type { Agent, PreStepDecision } from "@deepseek-ai/dsh-agent";
 import { isAppendSurfaceEvent, type SessionEvent, type SessionSeq } from "@deepseek-ai/dsh-session";
 import type { EpochOrdinalId, FeatureFlag, SpineProjection, Terminal } from "@spinejit/spine-sdk";
 import {
-  childReturnRefusal,
   createHostAdapter,
   isSpineToolName,
   operationFromSpineToolCall,
@@ -149,11 +148,6 @@ export class SpineAgent {
     if (isAppendSurfaceEvent(event) && surfaceRole(event) === "source") this.#unobserved.push(event);
     const arrival = arrivalOf(event);
     if (arrival !== null) this.#entered.add(arrival.producer.join("."));
-  }
-
-  /** Why this agent, a Spawn child, may not return its memory yet, or null. */
-  returnRefusal(): string | null {
-    return childReturnRefusal(this.#projection!, this.#entered);
   }
 
   /** Births still pending whose arrival is not in the log yet. */

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { runSpawnChild, toArrival } from "../dist/host/spawn.js";
+import { childState, runSpawnChild, toArrival } from "../dist/host/spawn.js";
 
 const task = { summary: "child", prompt: "do the work" };
 
@@ -19,6 +19,31 @@ function scripted(...terminals) {
     },
   };
 }
+
+const reply = (text) => ({ type: "reply", text });
+const other = { type: "other" };
+
+test("a child's last reply is the memory it returns; a last failed request, its error", () => {
+  assert.deepEqual(childState([other, reply("draft"), other, reply("final")]), {
+    open: 0, terminal: { outcome: "completed", memory: "final" },
+  });
+  assert.deepEqual(childState([other, { type: "error", message: "403 insufficient balance" }]), {
+    open: 0, terminal: { outcome: "errored", diagnostic: "403 insufficient balance" },
+  });
+});
+
+test("a child has not ended while a child of its own has not arrived", () => {
+  const log = [other, { type: "spawn", births: 2 }, reply("waiting"), { type: "arrival" }, reply("one in")];
+  assert.deepEqual(childState(log), { open: 1, terminal: null });
+  assert.deepEqual(childState([...log, { type: "arrival" }, reply("both in")]), {
+    open: 0, terminal: { outcome: "completed", memory: "both in" },
+  });
+});
+
+test("a child has not ended while its log ends on anything but a reply or an error", () => {
+  assert.deepEqual(childState([]), { open: 0, terminal: null });
+  assert.deepEqual(childState([reply("done"), other]), { open: 0, terminal: null });
+});
 
 test("a completed child arrives with its memory and nothing else", async () => {
   const { executor } = scripted({ outcome: "completed", memory: "done", executionRef: "ref-1" });
@@ -39,7 +64,7 @@ test("arrivals the core would reject are shaped into accepted ones", () => {
   assert.equal(oversized.memory, undefined);
 
   const empty = toArrival([0, 1], { outcome: "completed", memory: "  " });
-  assert.deepEqual(empty, { producer: [0, 1], outcome: "errored", diagnostic: "spawn child ended without typed memory" });
+  assert.deepEqual(empty, { producer: [0, 1], outcome: "errored", diagnostic: "spawn child ended without memory" });
 
   const long = toArrival([0, 1], { outcome: "errored", diagnostic: "é".repeat(4096) });
   assert.ok(new TextEncoder().encode(long.diagnostic).byteLength <= 4096);

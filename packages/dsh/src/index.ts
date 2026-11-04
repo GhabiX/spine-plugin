@@ -9,7 +9,7 @@ import { createNodeSpineRuntime, type SpineToolSpec } from "@spinejit/spine-sdk/
 import { SPINE_FEATURES, SpineAgent } from "./agent.js";
 import { arrivalMessage, SpineDshError } from "./events.js";
 import { withoutReasoningProjection } from "./reasoning.js";
-import { executeChild, recoverChildren, returnTool, spineSubagentProvider, type SpineWorld } from "./spawn.js";
+import { executeChild, recoverChildren, spineSubagentProvider, type SpineWorld } from "./spawn.js";
 
 /** The Cordis plugin DeepSeek Harness loads, by package name, from a bundle. */
 export const name = "spinejit";
@@ -39,7 +39,6 @@ export function apply(ctx: Context): void {
     agents.get(session.id)?.accept(event);
   });
   ctx.on("agent/created", async ({ agent }) => {
-    if (world.starting.has(agent.id)) agent.ctx.tools.register(returnTool(agents));
     // An arrival enters only the session that bore it, once, while its birth is open.
     const own = new SpawnChildren((arrival, wake) => {
       const producer = arrival.producer.join(".");

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { appendFile, mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -9,13 +9,15 @@ import { spineChildAssignmentText } from "@spinejit/spine-sdk/host";
 
 import {
   buildChildContinuation,
-  acceptedChildReturns,
   childSessionPath,
   inspectChildSession,
-  readChildReturn,
+  latestChildSession,
   readChildSessionIdentity,
+  readChildState,
   writeChildPrefixSession,
 } from "../dist/pi/child-session.js";
+import { arrivalMessage } from "../dist/pi/messages.js";
+import { spawnAcceptedDetails } from "../dist/pi/spawn-view.js";
 
 test("written prefix session is a Pi-openable fork of the parent branch", async () => {
   const dest = join(await mkdtemp(join(tmpdir(), "pi-spine-prefix-")), "child.jsonl");
@@ -59,67 +61,76 @@ test("child session path is keyed by parent session, birth entry and birth id, n
   );
 });
 
-test("a child's typed return is read back from its own session across attempts", async () => {
-  const root = await mkdtemp(join(tmpdir(), "pi-spine-return-"));
+test("a child's latest session is its newest attempt", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-spine-latest-"));
   const scope = { parentSessionId: "parent", parentSessionFile: join(root, "parent.jsonl") };
   const birth = { origin: "e7", producer: [0, 1] };
-  assert.deepEqual(await readChildReturn(scope, birth), { memory: null, latest: null });
-
+  assert.equal(await latestChildSession(scope, birth), null);
   const first = childSessionPath(scope, birth);
   await writeChildPrefixSession({ cwd: "/tmp/project", destPath: first, entries: [] });
-  assert.deepEqual(await readChildReturn(scope, birth), { memory: null, latest: { path: first, attempt: 0 } });
-
+  assert.deepEqual(await latestChildSession(scope, birth), { path: first, attempt: 0 });
   const retry = childSessionPath(scope, birth, 1);
   await writeChildPrefixSession({ cwd: "/tmp/project", destPath: retry, entries: [] });
-  const session = SessionManager.open(retry, undefined, "/tmp/project");
-  session.appendMessage({ role: "user", content: "assignment", timestamp: 1 });
-  for (const message of returnEntries("child result")) session.appendMessage(message);
-  assert.deepEqual(await readChildReturn(scope, birth), { memory: "child result", latest: { path: retry, attempt: 1 } });
+  assert.deepEqual(await latestChildSession(scope, birth), { path: retry, attempt: 1 });
   // A sibling whose id extends this one, or the same id born on another branch, is a different child.
-  assert.deepEqual(await readChildReturn(scope, { origin: "e7", producer: [0] }), { memory: null, latest: null });
-  assert.deepEqual(await readChildReturn(scope, { origin: "e8", producer: [0, 1] }), { memory: null, latest: null });
+  assert.equal(await latestChildSession(scope, { origin: "e7", producer: [0] }), null);
+  assert.equal(await latestChildSession(scope, { origin: "e8", producer: [0, 1] }), null);
 });
 
-test("only a return call whose own tool result succeeded is the child's typed return", () => {
-  const jsonl = (messages) => messages.map((message) => JSON.stringify({ type: "message", message })).join("\n");
-  const [call, result] = returnEntries("child result");
-  assert.deepEqual(acceptedChildReturns(`not-json\n${jsonl([call, result])}`), ["child result"]);
-  // The child's admission blocked the call: Pi records an error result.
-  assert.deepEqual(acceptedChildReturns(jsonl(returnEntries("too early", true))), []);
-  // A call without a result, or a result for another call, returns nothing.
-  assert.deepEqual(acceptedChildReturns(jsonl([call])), []);
-  assert.deepEqual(acceptedChildReturns(jsonl([call, { ...result, toolCallId: "other" }])), []);
-  assert.deepEqual(acceptedChildReturns(jsonl([call, result, call, result])), ["child result", "child result"]);
+const message = (id, value) => ({ type: "message", id, timestamp: "2026-11-04T12:00:00.000Z", message: value });
+const user = (content) => ({ role: "user", content, timestamp: 1 });
+const reply = (text) => ({ role: "assistant", content: [{ type: "text", text }], stopReason: "stop", timestamp: 2 });
+const spawnCall = (id) => ({ role: "assistant", content: [{ type: "toolCall", id, name: "spine_spawn", arguments: {} }], stopReason: "toolUse", timestamp: 2 });
+const spawnResult = (id, tasks) => ({
+  role: "toolResult", toolCallId: id, toolName: "spine_spawn", content: [{ type: "text", text: "accepted" }],
+  details: spawnAcceptedDetails(tasks), isError: false, timestamp: 3,
 });
+const arrival = (id, producer) => {
+  const { role: _role, ...custom } = arrivalMessage({ producer, outcome: "completed", memory: "m" });
+  return { type: "custom_message", id, timestamp: "2026-11-04T12:00:00.000Z", ...custom };
+};
 
-/** A child's typed return as Pi records it: the call, then its tool result. */
-function returnEntries(memory, isError = false) {
-  return [
-    {
-      role: "assistant",
-      content: [{ type: "toolCall", id: "return-1", name: "spine_child_return", arguments: { memory } }],
-      api: "test", provider: "test", model: "test",
-      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-      stopReason: "toolUse",
-      timestamp: 2,
-    },
-    {
-      role: "toolResult",
-      toolCallId: "return-1",
-      toolName: "spine_child_return",
-      content: [{ type: "text", text: isError ? "blocked" : "Spine child memory accepted" }],
-      isError,
-      timestamp: 3,
-    },
-  ];
+/** A child session as Pi writes it: one chain of entries, the prefix first. */
+async function childFile(prefix, own) {
+  const chain = (entries, parentId) => entries.map((entry, index) => ({ ...entry, parentId: index === 0 ? parentId : entries[index - 1].id }));
+  const path = join(await mkdtemp(join(tmpdir(), "pi-spine-end-")), "child.jsonl");
+  const written = chain(prefix, null);
+  await writeChildPrefixSession({ cwd: "/tmp/project", destPath: path, entries: written });
+  await appendFile(path, chain(own, written.at(-1)?.id ?? null).map((entry) => `${JSON.stringify(entry)}\n`).join(""));
+  return path;
 }
 
+test("a child's end is read from what it wrote after its birth prefix", async () => {
+  // The parent's own Spawn is unarrived in the prefix: its births are the parent's to join.
+  const prefix = [
+    message("p1", user("request")),
+    message("p2", spawnCall("spawn-p")),
+    message("p3", spawnResult("spawn-p", [{ summary: "X", prompt: "x" }])),
+    message("p4", reply("parent reply")),
+  ];
+  const ended = [message("c1", user("assignment")), message("c2", reply("child result"))];
+  const completed = { open: 0, terminal: { outcome: "completed", memory: "child result" } };
+  assert.deepEqual(readChildState(await childFile(prefix, ended)), completed);
+  // Pi may compact after the last reply: the summary is bookkeeping, not a message of the child's.
+  const compaction = { type: "compaction", id: "c3", timestamp: "2026-11-04T12:00:00.000Z", summary: "s", firstKeptEntryId: "c1", tokensBefore: 100 };
+  assert.deepEqual(readChildState(await childFile(prefix, [...ended, compaction])), completed);
+  // A child that wrote nothing has not ended, whatever its prefix ends with.
+  assert.deepEqual(readChildState(await childFile(prefix, [])), { open: 0, terminal: null });
+});
+
+test("a child that stops before its own children arrive has not ended", async () => {
+  const tasks = [{ summary: "X1", prompt: "a" }, { summary: "X2", prompt: "b" }];
+  const own = [message("c1", user("assignment")), message("c2", spawnCall("spawn-c")), message("c3", spawnResult("spawn-c", tasks)), message("c4", reply("waiting"))];
+  assert.deepEqual(readChildState(await childFile([], own)), { open: 2, terminal: null });
+  const arrived = [...own, arrival("c5", [1, 1]), arrival("c6", [1, 2]), message("c7", reply("X1 and X2 done"))];
+  assert.deepEqual(readChildState(await childFile([], arrived)), { open: 0, terminal: { outcome: "completed", memory: "X1 and X2 done" } });
+});
 
 test("child continuation preserves the active session and optional guidance", () => {
   const prompt = buildChildContinuation("focus on the failing test");
   assert.match(prompt, /same active branch/);
   assert.match(prompt, /focus on the failing test/);
-  assert.match(prompt, /spine_child_return exactly once/);
+  assert.match(prompt, /end with a final reply that holds the complete terminal memory/);
 });
 
 test("child session inspection detects durable assignment context", async () => {

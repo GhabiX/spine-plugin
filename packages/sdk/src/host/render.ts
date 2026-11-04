@@ -31,10 +31,7 @@ export function spineArrivalText(arrival: SpawnArrival): string {
   return `<spine_arrival node_id="${arrival.producer.join(".")}" outcome="${arrival.outcome}">\n${body}\n</spine_arrival>`;
 }
 
-/** The tool a Spawn child calls once to return its memory to its parent. */
-export const SPINE_CHILD_RETURN_TOOL = "spine_child_return";
-
-/** FormularDef 2.5 Δ_child: a Spawn child's assignment: identity, peers, inherited-scope rules, and typed return. */
+/** FormularDef 2.5 Δ_child: a Spawn child's assignment: identity, peers, inherited-scope rules, and its final reply as the memory it returns. */
 export function spineChildAssignmentText(task: SpawnTask, peers: readonly SpawnTask[]): string {
   const identity = task.summary.trim();
   const peerLines = peers
@@ -57,7 +54,7 @@ When the assignment declares a collaboration contract, follow its named root, pe
 
 Other shared-workspace changes remain context for the assignment and do not add executable work. Production-file ownership and any integration responsibility remain exactly as declared in the assignment.
 
-Complete this branch by calling ${SPINE_CHILD_RETURN_TOOL} exactly once with the complete continuation memory. After that call, execution ends.
+Complete this branch by ending with a final reply that holds the complete continuation memory. That last reply is what returns to the spawning continuation.
 
 Assignment:
 ${task.prompt}`;
