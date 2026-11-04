@@ -24,4 +24,6 @@ test("a Spawn child may not close or leave the node it was spawned in; its own n
   }
   const opened = { ...projection([1, 1, 3]), nodes: [...projection([1, 1, 3]).nodes, node([1, 1, 3], "Task")] };
   assert.equal(spineToolRefusal(opened, "spine_close", new Set(), [1, 1, 2]), null);
+  // Spawned at the root, the child starts there: the same answer, not the root's.
+  assert.match(spineToolRefusal(projection([1]), "spine_close", new Set(), [1, 2]), /1 belongs to the session that spawned you/);
 });

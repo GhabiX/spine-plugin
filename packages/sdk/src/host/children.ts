@@ -47,10 +47,11 @@ export function spineToolRefusal(
   if (name !== "spine_close" && name !== "spine_next") return null;
   const cursor = projection.nodes.find((node) => sameId(node.id, projection.cursor));
   if (cursor === undefined) return "Spine cursor is missing from the derived tree";
-  if (cursor.kind === "RootEpoch") return "no open Spine node is available to close";
+  // A Spawn child starts in the node it was spawned in, the root included: it is its parent's.
   if (birth !== null && sameId(cursor.id, birth.slice(0, -1))) {
     return `Spine node ${cursor.id.join(".")} belongs to the session that spawned you: a Spawn child closes only the nodes it opened. End your work with a final reply; that reply is your result.`;
   }
+  if (cursor.kind === "RootEpoch") return "no open Spine node is available to close";
   const pending = unarrivedBirths(projection, projection.cursor).filter((birth) => !entered.has(birth.producer.join(".")));
   if (pending.length > 0) {
     return `Spawned children ${formatBirths(pending)} have not arrived. Each result arrives as its own message; close this node after they have arrived.`;
