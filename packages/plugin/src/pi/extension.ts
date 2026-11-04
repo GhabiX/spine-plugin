@@ -1059,9 +1059,6 @@ function childRuntimeFlags(ctx: ExtensionContext): string[] {
   if (ctx.thinkingLevel !== undefined) {
     flags.push("--thinking", ctx.thinkingLevel);
   }
-  if (process.argv.includes("--approve")) {
-    flags.push("--approve");
-  }
   return flags;
 }
 

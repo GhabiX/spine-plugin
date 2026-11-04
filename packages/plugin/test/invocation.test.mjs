@@ -47,6 +47,51 @@ test("tsx CLI plus cli.ts keeps the tsx prefix in front of the Pi entry", () => 
   );
 });
 
+test("the parent's load flags go to the child, a relative -e resolved where the parent started; flags after -- are messages", () => {
+  assert.deepEqual(
+    resolvePiInvocation(
+      {
+        execPath: "/usr/bin/node",
+        execArgv: [],
+        argv: [
+          "/usr/bin/node",
+          "/abs/cli.js",
+          "-ne",
+          "-e",
+          "/abs/dev/extension.js",
+          "--model",
+          "google/gemini",
+          "--extension",
+          "timeout.ts",
+          "-e",
+          "npm:@x/y",
+          "--no-mcp",
+          "-a",
+          "--",
+          "-e",
+          "/abs/message",
+        ],
+      },
+      exists,
+    ),
+    {
+      command: "/usr/bin/node",
+      args: [
+        "/abs/cli.js",
+        "--no-extensions",
+        "--extension",
+        "/abs/dev/extension.js",
+        "--extension",
+        join(process.cwd(), "timeout.ts"),
+        "--extension",
+        "npm:@x/y",
+        "--no-mcp",
+        "--approve",
+      ],
+    },
+  );
+});
+
 test("tsx loaders stay in front of cli.ts", () => {
   assert.deepEqual(
     resolvePiInvocation(
