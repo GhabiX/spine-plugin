@@ -84,7 +84,9 @@ the node, and the folded node replaces the node's own suffix, so everything
 rendered before the node's first cell is unchanged. Folding at the Close
 itself made models doubt the memory and redo the node's work. The sampling
 that folds a node no longer follows the prefix it was sampled on, so it renders
-without reasoning.
+without reasoning where the provider ties reasoning to the prefix. Gemini does
+not, and requires its thought signatures on the function calls of its current
+turn, where that sampling sits; a Gemini output keeps its reasoning.
 
 A folded task node starts with its descriptor, now `Closed`: its id and goal,
 where its folded work began. It then renders what it keeps in their original
