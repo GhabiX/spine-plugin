@@ -36,10 +36,20 @@ export function withoutReasoning(message: Message): Message {
   return freezeMessage({ ...message, content, source } as unknown as Message);
 }
 
-/** Whether the message still carries reasoning the label asks to drop. */
+/**
+ * Whether the message still carries reasoning the label asks to drop.
+ *
+ * Gemini's reasoning is not tied to the prefix: Gemini accepts its thought
+ * signatures after the prefix changed, and requires them on the function
+ * calls of its current turn, where the sampling after a close sits once the
+ * node folds. A Gemini output keeps its reasoning. Only the pi-ai adapter's
+ * replay state names the API that produced a message.
+ */
 export function hasReasoning(message: Message): boolean {
-  return message.content.some((block) => block.type === "reasoning") ||
-    (message.source as { replayState?: unknown }).replayState !== undefined;
+  const replayState = (message.source as { replayState?: { response?: { kind?: unknown; api?: unknown } } }).replayState;
+  const api = replayState?.response?.kind === "pi-ai" ? replayState.response.api : undefined;
+  if (typeof api === "string" && api.startsWith("google-")) return false;
+  return message.content.some((block) => block.type === "reasoning") || replayState !== undefined;
 }
 
 export const withoutReasoningProjection = {

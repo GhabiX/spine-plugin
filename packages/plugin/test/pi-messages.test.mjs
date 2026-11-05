@@ -161,6 +161,7 @@ test("Pi shows a kept reply without its reasoning", () => {
       { type: "thinking", thinking: "", thinkingSignature: "opaque", redacted: true },
       { type: "text", text: "second part" },
     ],
+    api: "anthropic-messages",
     stopReason: "stop",
     timestamp: 7,
   };
@@ -196,6 +197,7 @@ test("Pi shows a sampling that closed a node without its reasoning, calls and re
       { type: "toolCall", id: "call_1|fc_1", name: "spine_close", arguments: { memory: "m" }, thoughtSignature: "call-sig" },
       { type: "toolCall", id: "toolu_2", name: "read", arguments: { path: "a" }, thoughtSignature: "call-sig-2" },
     ],
+    api: "openai-responses",
     stopReason: "toolUse",
     timestamp: 1,
   };
@@ -235,6 +237,35 @@ test("Pi shows a sampling that closed a node without its reasoning, calls and re
   ]);
   assert.equal(closing.content.length, 4);
   assert.equal(closing.content[2].id, "call_1|fc_1");
+});
+
+test("Pi shows a Gemini output labelled WithoutReasoning with its reasoning: Gemini requires its signatures", () => {
+  const bindings = new PiSourceBindings();
+  const after = {
+    role: "assistant",
+    content: [
+      { type: "thinking", thinking: "read next", thinkingSignature: "think-sig" },
+      { type: "toolCall", id: "call_1", name: "read", arguments: { path: "a" }, thoughtSignature: "call-sig" },
+    ],
+    api: "google-generative-ai",
+    stopReason: "toolUse",
+    timestamp: 1,
+  };
+  bindings.bind(SOURCE_ID, after, "after");
+  const messages = materializePiContext({
+    transactionId: "preview:plan",
+    contextPlan: {
+      schema: "spine.context.plan.v2",
+      thread: "pi-session",
+      epoch: 0,
+      source_snapshot_digest: "source",
+      cells: [{ type: "source", source_id: SOURCE_ID, labels: ["WithoutReasoning"] }],
+      plan_digest: "plan",
+    },
+    projection: { nodes: [], cursor: [], visible_context: [], last_boundary: null },
+  }, bindings);
+
+  assert.deepEqual(messages, [after]);
 });
 
 test("Pi materialization applies an entry projection without matching message text", () => {

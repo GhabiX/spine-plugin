@@ -64,6 +64,8 @@ export type PiAgentMessage =
   | {
       role: "assistant";
       content: Array<PiTextContent | PiThinkingContent | PiToolCall>;
+      /** The pi-ai API that produced it, such as `openai-responses` or `google-generative-ai`. */
+      api: string;
       [key: string]: unknown;
     }
   | {
@@ -370,11 +372,17 @@ function unsupportedProjection(item: ContextItem): PiContextMaterializationError
  * `textSignature`, `thoughtSignature` and, for OpenAI Responses, the item id
  * after `|` in a tool call id, which pairs the call with its reasoning item;
  * the call keeps its call id, and its result is renamed to match.
+ *
+ * Gemini's reasoning is not tied to the prefix: Gemini accepts its thought
+ * signatures after the prefix changed, and requires them on the function
+ * calls of its current turn, where the sampling after a close sits once the
+ * node folds. A Gemini output keeps its reasoning.
  */
 function withoutReasoning(message: PiAgentMessage, renamedCalls: Map<string, string>): PiAgentMessage {
   if (message.role !== "assistant") {
     throw new PiContextMaterializationError(`Spine WithoutReasoning label targets a ${message.role} message`);
   }
+  if (message.api.startsWith("google-")) return message;
   const copy = structuredClone(message);
   copy.content = copy.content.flatMap((part) => {
     if (part.type === "thinking") return [];
