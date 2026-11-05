@@ -5,7 +5,6 @@ import {
   renderSpawnAccepted,
   renderSpawnCall,
   spawnAcceptedDetails,
-  spawnAcceptedText,
 } from "../dist/pi/spawn-view.js";
 
 const theme = {
@@ -36,9 +35,3 @@ test("spawn acceptance lists each task with its activity word", () => {
   assert.deepEqual(renderSpawnAccepted({ unrelated: true }, theme).render(80), ["Spine Spawn"]);
 });
 
-test("the model is told results arrive later and the node waits for them", () => {
-  const text = spawnAcceptedText(tasks);
-  assert.match(text, /accepted 3 tasks/);
-  assert.match(text, /arrives later as its own message/);
-  assert.match(text, /cannot close until all of them have arrived/);
-});

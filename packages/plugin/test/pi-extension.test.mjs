@@ -1306,11 +1306,11 @@ test("root close and next return to the model without aborting", async () => {
   );
   assert.deepEqual(closeAdmission, {
     block: true,
-    reason: "no open Spine node is available to close",
+    reason: "You are at the root: no Spine node is open, so there is none to close.",
   });
   assert.deepEqual(nextAdmission, {
     block: true,
-    reason: "no open Spine node is available to close",
+    reason: "You are at the root: no Spine node is open, so there is none to close.",
   });
   assert.equal(ctx.aborts, 0);
 
@@ -1350,6 +1350,7 @@ test("WASM-backed extension completes one Pi Open sampling transaction", async (
     ctx.context,
   );
   assert.equal(openResult.details.staged, true);
+  assert.equal(openResult.content[0].text, "The node is open.");
   await pi.emit(
     "tool_result",
     {
@@ -1399,6 +1400,9 @@ test("WASM-backed extension completes one Pi Open sampling transaction", async (
   assert.deepEqual(after.messages.slice(1).map((message) => message.role), ["assistant", "toolResult", "custom"]);
   assert.match(after.messages[3].content, /<spine_node id="1\.1" summary="inspect" status="opened">/);
   assert.equal(ctx.aborts, 0);
+  // A close's result names the node it closed and where the model is then, from the tree the model saw.
+  const closeResult = await pi.tools.get("spine_close").execute("close-1", { memory: "m" }, undefined, undefined, ctx.context);
+  assert.equal(closeResult.content[0].text, "Node 1.1 is closed and its memory is recorded. You are back at the root.");
 
   const compact = await pi.emit(
     "session_before_compact",

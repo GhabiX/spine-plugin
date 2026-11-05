@@ -87,6 +87,11 @@ that folds a node no longer follows the prefix it was sampled on, so it renders
 without reasoning where the provider ties reasoning to the prefix. Gemini does
 not, and requires its thought signatures on the function calls of its current
 turn, where that sampling sits; a Gemini output keeps its reasoning.
+The model reads a Spine call's result in that request, after the call has
+taken effect, so the result says what the call did: the node a Close or Next
+closed, and after a Close where the model is now. An acknowledgement that only
+said the call was staged left models unsure whether the node had closed: they
+stopped, closed it again, or Gemini returned a malformed response.
 
 A folded task node starts with its descriptor, now `Closed`: its id and goal,
 where its folded work began. It then renders what it keeps in their original

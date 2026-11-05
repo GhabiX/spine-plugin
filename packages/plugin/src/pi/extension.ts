@@ -78,9 +78,11 @@ import { registerSpineTreeNavigation } from "./navigation/index.js";
 import { queryPiSpineMode, type PiSpineMode } from "./session-mode.js";
 import {
   formatBirths,
+  isSpineToolName,
   SpawnChildren,
   spineChildAssignmentText,
   spineToolRefusal,
+  spineToolResult,
   unarrivedBirths,
   type SpawnBirth,
 } from "@spinejit/spine-sdk/host";
@@ -88,7 +90,6 @@ import {
   renderSpawnAccepted,
   renderSpawnCall,
   spawnAcceptedDetails,
-  spawnAcceptedText,
 } from "./spawn-view.js";
 
 const CHILD_FLAG = "spine-child";
@@ -231,7 +232,7 @@ function activatePiExtension(
     treeDisplay: new SpineTreeDisplay(),
     samplingPrefix: null,
   };
-  registerSpineTools(pi, configToml);
+  registerSpineTools(pi, slot, configToml);
   const modes = new Map<string, PiSpineMode>();
   pi.on("session_start", (_event, ctx) => {
     const sessionId = ctx.sessionManager.getSessionId();
@@ -241,7 +242,7 @@ function activatePiExtension(
     slot.mode = undefined;
     if (mode === "st") {
       // Inactive alone is insufficient: codemode/deferred tools remain callable.
-      registerSpineTools(pi, configToml, "hidden");
+      registerSpineTools(pi, slot, configToml, "hidden");
       slot.generation += 1;
       disposeCurrent(slot);
       slot.initialization = null;
@@ -252,7 +253,7 @@ function activatePiExtension(
       if (claim.owner !== undefined && claim.owner !== "@spinejit/pi-spinejit") {
         throw new Error(`Pi compaction plugin conflict: @spinejit/pi-spinejit cannot load with ${claim.owner}. Enable only one compaction plugin.`);
       }
-      if (previousMode === "st") registerSpineTools(pi, configToml);
+      if (previousMode === "st") registerSpineTools(pi, slot, configToml);
     }
     slot.mode = mode;
   });
@@ -278,11 +279,14 @@ function activatePiExtension(
 
 function registerSpineTools(
   pi: ExtensionAPI,
+  slot: MutableSessionSlot,
   configToml: string,
   exposure: "direct" | "hidden" = "direct",
 ): void {
   for (const tool of loadCanonicalSpineTools(configToml)) {
-    if (tool.name === "spine_spawn") {
+    const name = tool.name;
+    if (!isSpineToolName(name)) throw new Error(`unknown Spine tool ${name}`);
+    if (name === "spine_spawn") {
       // The tool only acknowledges: the Spawn is staged at tool_call, and the
       // children start after this turn commits their births (turn_end).
       pi.registerTool({
@@ -293,9 +297,10 @@ function registerSpineTools(
         parameters: tool.parameters,
         executionMode: "sequential",
         async execute(_toolCallId, params) {
-          const tasks = decodeSpawnTasks(params as unknown as Record<string, unknown>);
+          const input = params as unknown as Record<string, unknown>;
+          const tasks = decodeSpawnTasks(input);
           return {
-            content: [{ type: "text", text: spawnAcceptedText(tasks) }],
+            content: [{ type: "text", text: spineToolResult(admittedProjection(slot), name, input) }],
             details: spawnAcceptedDetails(tasks),
           };
         },
@@ -317,8 +322,8 @@ function registerSpineTools(
       description: tool.description,
       parameters: tool.parameters,
       renderShell: "self",
-      async execute() {
-        return toolResult(`Spine ${tool.name} staged`);
+      async execute(_toolCallId, params) {
+        return toolResult(spineToolResult(admittedProjection(slot), name, params as unknown as Record<string, unknown>));
       },
       renderCall() {
         return linesComponent([]);
@@ -1453,6 +1458,12 @@ function disposeCurrent(slot: MutableSessionSlot): void {
   slot.current?.children.dispose();
   slot.current?.runtime.dispose();
   slot.current = null;
+}
+
+/** The tree the model saw when it made the call being admitted. */
+function admittedProjection(slot: MutableSessionSlot): SpineProjection {
+  if (slot.current === null) throw new Error("a Spine tool ran before its session published a context");
+  return slot.current.latestContext.projection;
 }
 
 function toolResult(text: string) {

@@ -112,7 +112,7 @@ function lastTurnAborted(agent: Agent): boolean {
   return false;
 }
 
-/** A Spine tool only admits its call; its sampling stages and commits it when it settles. */
+/** A Spine tool only admits its call; its sampling stages and commits it when it settles, before the model reads the result. */
 function spineTool(spec: SpineToolSpec, agents: ReadonlyMap<string, SpineAgent>): ToolDefinition {
   const name = `spine_${spec.id}`;
   if (!isSpineToolName(name)) throw new SpineDshError(`unknown Spine tool ${name}`);
@@ -121,15 +121,14 @@ function spineTool(spec: SpineToolSpec, agents: ReadonlyMap<string, SpineAgent>)
     description: spec.description,
     parameters: spec.parameters as ToolDefinition["parameters"],
     output: {
-      schema: { type: "object", properties: { staged: { type: "string" } }, required: ["staged"] },
-      render: () => [{ type: "text", text: `Spine ${name} staged` }],
+      schema: { type: "object", properties: { result: { type: "string" } }, required: ["result"] },
+      render: (_args, value) => [{ type: "text", text: (value as { result: string }).result }],
     },
     async execute(args, exec) {
       if (exec.parent !== undefined) throw new SpineDshError(`${name} must be called by the model directly, not from code`);
       const spine = exec.agent === undefined ? undefined : agents.get(exec.agent.id);
       if (spine === undefined) throw new SpineDshError(`${name} was called outside a Spine agent`);
-      spine.admit(name, args as Record<string, unknown>);
-      return { staged: name };
+      return { result: spine.admit(name, args as Record<string, unknown>) };
     },
   };
 }

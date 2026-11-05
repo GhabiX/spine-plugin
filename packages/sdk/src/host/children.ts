@@ -1,5 +1,5 @@
 import type { SpawnArrival, SpawnTask, SpineProjection } from "../index.js";
-import type { SpineToolName } from "./tools.js";
+import { decodeSpineSpawnTasks, type SpineToolName } from "./tools.js";
 import { toArrival } from "./spawn.js";
 
 /** A committed birth: the child's id, the task it was given, and where its sampling starts. */
@@ -53,16 +53,38 @@ export function spineToolRefusal(
   if (birth !== null && sameId(cursor.id, birth.slice(0, -1))) {
     return `Spine node ${cursor.id.join(".")} belongs to the session that spawned you: a Spawn child closes only the nodes it opened. End your work with a final reply; that reply is your result.`;
   }
-  if (cursor.kind === "RootEpoch") return "no open Spine node is available to close";
+  if (cursor.kind === "RootEpoch") return "You are at the root: no Spine node is open, so there is none to close.";
   const pending = unarrivedBirths(projection, projection.cursor).filter((birth) => !entered.has(birth.producer.join(".")));
   if (pending.length > 0) {
     return `Spawned children ${formatBirths(pending)} have not arrived. Each result arrives as its own message; close this node after they have arrived.`;
   }
-  // The closing sampling folds with the node, so results beside it would be lost.
+  // The memory is written before the calls beside it return, and their results fold away with the node.
   if (name === "spine_close" && responseCalls > 1) {
-    return "spine_close must be the only tool call in its response: the node folds into its memory with this step, so the other calls' results would not be shown. Call spine_close again on its own.";
+    return "spine_close must be the only tool call in its response: the node's memory is written before the other calls return, and their results fold away with the node. Call spine_close again on its own.";
   }
   return null;
+}
+
+/**
+ * The result of an admitted Spine call as the model reads it: what the call
+ * has done once its sampling commits, which is before the model reads it.
+ * The call is the only Spine call in its response, so the cursor at
+ * admission fixes its effect. An opened node's descriptor follows the result;
+ * spawned children start when the turn ends.
+ */
+export function spineToolResult(projection: SpineProjection, name: SpineToolName, input: Record<string, unknown>): string {
+  if (name === "spine_spawn") {
+    const tasks = decodeSpineSpawnTasks(input);
+    return `Spine Spawn accepted ${tasks.length} tasks. Each child starts when this turn ends, and its result arrives later as its own message. This node cannot close until all of them have arrived.`;
+  }
+  if (name === "spine_open") return "The node is open.";
+  const cursor = projection.nodes.find((node) => sameId(node.id, projection.cursor));
+  if (cursor === undefined) throw new Error("Spine cursor is missing from the derived tree");
+  const closed = `Node ${cursor.id.join(".")} is closed and its memory is recorded.`;
+  if (name === "spine_next") return `${closed} The next node is open.`;
+  const parent = projection.nodes.find((node) => cursor.parent !== null && sameId(node.id, cursor.parent));
+  if (parent === undefined) throw new Error(`Spine node ${cursor.id.join(".")} has no parent in the derived tree`);
+  return parent.kind === "RootEpoch" ? `${closed} You are back at the root.` : `${closed} You are back in node ${parent.id.join(".")}.`;
 }
 
 function sameId(left: readonly number[], right: readonly number[]): boolean {

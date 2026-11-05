@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { mountDsh } from "./harness.mjs";
-import { call, memory, node, shown, staged, closed } from "./shown.mjs";
+import { call, memory, node, shown, result, closed } from "./shown.mjs";
 
 /** Run `before` in one world, then resume the same session in a new one and run `after`. */
 async function restart(before, after, drive) {
@@ -39,10 +39,10 @@ test("a resumed session keeps its open node, user numbering and Close", async ()
     },
   );
   assert.deepEqual(run.ends, ["completed", "completed", "completed"]);
-  const before = ["user: [U1]\nstart", "context: …", call("spine_open", { goal: "A" }), staged("spine_open"), node("1.1", "A"), "assistant: replyA", "user: [U2]\nmore"];
+  const before = ["user: [U1]\nstart", "context: …", call("spine_open", { goal: "A" }), result("spine_open"), node("1.1", "A"), "assistant: replyA", "user: [U2]\nmore"];
   assert.deepEqual(run.requests, [
     before,
-    [...before, call("spine_close", { memory: "memA" }), staged("spine_close")],
+    [...before, call("spine_close", { memory: "memA" }), result("spine_close")],
     ["user: [U1]\nstart", "context: …", closed("1.1", "A"), "assistant: replyA", "user: [U2]\nmore", memory("1.1", "memA"), "assistant: done", "user: [U3]\nlast"],
   ]);
 });
@@ -55,7 +55,7 @@ test("a failed sampling replays as failed: the Open it staged is not committed",
   );
   assert.deepEqual(run.ends, ["error", "completed"]);
   assert.deepEqual(run.requests, [
-    ["user: [U1]\nstart", "context: …", call("spine_open", { goal: "A" }), staged("spine_open"), node("1.1", "A"), "user: [U2]\nagain"],
+    ["user: [U1]\nstart", "context: …", call("spine_open", { goal: "A" }), result("spine_open"), node("1.1", "A"), "user: [U2]\nagain"],
   ]);
 });
 
@@ -164,7 +164,7 @@ test("a stream that ends without a finish chunk stopped by itself: its reply sur
     ["last", ["ok"]],
   ]);
   assert.deepEqual(restarted, continuous);
-  assert.deepEqual(continuous.requests.at(-2), [...continuous.requests.at(-3), call("spine_close", { memory: "mA" }), staged("spine_close")]);
+  assert.deepEqual(continuous.requests.at(-2), [...continuous.requests.at(-3), call("spine_close", { memory: "mA" }), result("spine_close")]);
   assert.deepEqual(continuous.requests.at(-1), [
     "user: [U1]\nstart", "context: …", closed("1.1", "A"), "assistant: replyA", "user: [U2]\nmore", memory("1.1", "mA"),
     "assistant: done", "user: [U3]\nlast",

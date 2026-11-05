@@ -62,10 +62,6 @@ export function spawnAcceptedDetails(tasks: readonly SpawnTask[]): SpawnAccepted
   };
 }
 
-export function spawnAcceptedText(tasks: readonly SpawnTask[]): string {
-  return `Spine Spawn accepted ${tasks.length} tasks. Each child starts when this turn ends, and its result arrives later as its own message. This node cannot close until all of them have arrived.`;
-}
-
 export function renderSpawnCall(taskCount: number, theme: SpineTheme) {
   const count = taskCount === 1 ? "1 task" : `${taskCount} tasks`;
   return linesComponent([`${theme.fg("toolTitle", theme.bold("spine_spawn"))}  ${theme.fg("dim", count)}`]);

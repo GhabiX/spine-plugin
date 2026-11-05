@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { mountDsh } from "./harness.mjs";
-import { arrival, call, memory, node, shown, staged, closed } from "./shown.mjs";
+import { arrival, call, memory, node, shown, result, closed } from "./shown.mjs";
 
 const X = "session-1:spawn:1.1.1";
 const Y = "session-1:spawn:1.1.2";
@@ -51,13 +51,13 @@ test("children start from the log before the Spawn; each arrival wakes the paren
 
     const parent = requestsOf(dsh, "session-1");
     const births = [
-      call("spine_spawn", spawnXY[0][1]), staged("spine_spawn"),
+      call("spine_spawn", spawnXY[0][1]), result("spine_spawn", 2),
       'spine: <spine_spawn node_id="1.1.1" summary="X">\n</spine_spawn>',
       'spine: <spine_spawn node_id="1.1.2" summary="Y">\n</spine_spawn>',
     ];
     assert.deepEqual(parent[3], [...parent[1], ...births, "assistant: waiting", arrival("1.1.1", "completed", "x is 42")]);
     assert.deepEqual(parent[4], [...parent[3], "assistant: got x", arrival("1.1.2", "completed", "y is 7")]);
-    assert.deepEqual(parent[5], [...parent[4], call("spine_close", { memory: "m" }), staged("spine_close")]);
+    assert.deepEqual(parent[5], [...parent[4], call("spine_close", { memory: "m" }), result("spine_close")]);
     // Once folded, the node keeps the births and arrivals, as it keeps child
     // memories; the replies given while a birth was unarrived only reported waiting.
     assert.deepEqual(parent[6], [
@@ -130,7 +130,7 @@ test("Close and a child's end wait for their children: a reply before they arriv
     assert.match(early.content[0].text, /Spawned children 1\.1\.1 \(X\), 1\.1\.2 \(Y\) have not arrived/);
 
     const [unfolded, last] = requestsOf(dsh, "session-1").slice(-2);
-    assert.deepEqual(unfolded.slice(-2), [call("spine_close", { memory: "m" }), staged("spine_close")], "the node shows as it was");
+    assert.deepEqual(unfolded.slice(-2), [call("spine_close", { memory: "m" }), result("spine_close")], "the node shows as it was");
     assert.deepEqual(last.slice(-3), [memory("1.1", "m"), "assistant: done", "user: [U2]\nthanks"], "the memory ends the folded node");
     assert.ok(last.findLastIndex((line) => line.startsWith("user: <spine_arrival")) < last.length - 3, "what the node keeps comes first");
     for (const request of [unfolded, last]) {
@@ -315,7 +315,7 @@ test("a headless run ends only after the parent has taken its children's arrival
   try {
     const agent = await dsh.runHeadless("start");
     const unfolded = requestsOf(dsh, "session-1").at(-1);
-    assert.deepEqual(unfolded.slice(-2), [call("spine_close", { memory: "m" }), staged("spine_close")], "the node shows as it was");
+    assert.deepEqual(unfolded.slice(-2), [call("spine_close", { memory: "m" }), result("spine_close")], "the node shows as it was");
     const answer = agent.session.deriveMessages().at(-1);
     assert.equal(answer.role, "assistant");
     assert.equal(answer.content[0].text, "x is 42, y is 7");

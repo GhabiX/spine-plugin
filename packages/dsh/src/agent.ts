@@ -6,6 +6,7 @@ import {
   isSpineToolName,
   operationFromSpineToolCall,
   spineToolRefusal,
+  spineToolResult,
   unarrivedBirths,
   type SpawnBirth,
   type SpineHostAdapter,
@@ -200,11 +201,11 @@ export class SpineAgent {
   }
 
   /**
-   * Admit one Spine tool call of the current sampling, or throw the tool error
-   * the model sees. The sampling stages it when it settles, if its logged
-   * result is not an error.
+   * Admit one Spine tool call of the current sampling and return its result
+   * text, or throw the tool error the model sees. The sampling stages it when
+   * it settles, if its logged result is not an error.
    */
-  admit(name: SpineToolName, args: Record<string, unknown>): void {
+  admit(name: SpineToolName, args: Record<string, unknown>): string {
     if (this.fault !== null) throw new SpineDshError("Spine context is faulted", { cause: this.fault });
     operationFromSpineToolCall(name, args);
     const sampling = this.#sampling;
@@ -214,6 +215,7 @@ export class SpineAgent {
     const refusal = spineToolRefusal(this.#projection!, name, this.#entered, sessionBirth(this.agent.id), this.#responseCalls(sampling.from));
     if (refusal !== null) throw new SpineDshError(refusal);
     sampling.called = name;
+    return spineToolResult(this.#projection!, name, args);
   }
 
   /** Settle the open sampling, if any, over its stretch of the log so far. */
