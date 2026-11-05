@@ -211,7 +211,7 @@ export class SpineAgent {
     if (sampling === null) throw new SpineDshError(`${name} ran outside a Spine sampling`);
     if (sampling.called !== null) throw new SpineToolLimitError(sampling.called);
     // What the core would refuse at commit is a tool error now, not a fault later.
-    const refusal = spineToolRefusal(this.#projection!, name, this.#entered, sessionBirth(this.agent.id));
+    const refusal = spineToolRefusal(this.#projection!, name, this.#entered, sessionBirth(this.agent.id), this.#responseCalls(sampling.from));
     if (refusal !== null) throw new SpineDshError(refusal);
     sampling.called = name;
   }
@@ -317,6 +317,17 @@ export class SpineAgent {
     ids.forEach((id, index) => this.#sourceSeqs.set(sourceKey(id), events[index]!.seq));
     this.#userSources += events.filter(isUserSource).length;
     return events.length;
+  }
+
+  /** Tool calls in the model response logged since `from`, the sampling's start. */
+  #responseCalls(from: number): number {
+    for (let seq = this.agent.session.seq - 1; seq >= from; seq -= 1) {
+      const event = this.#events.get(seq);
+      if (event?.type === "assistant/message") {
+        return event.data.message.content.filter((block) => block.type === "tool-call").length;
+      }
+    }
+    return 1;
   }
 
   #seqOf(id: EpochOrdinalId): SessionSeq {

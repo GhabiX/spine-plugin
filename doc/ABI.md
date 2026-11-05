@@ -80,15 +80,15 @@ operation is rejected.
 A closed task node starts with its descriptor, now `Closed`: its id and goal,
 where its folded work began. It then renders what it keeps in their original
 order (user messages, replies, births, arrivals and its children's memories),
-then the sampling that closed it (its model output labelled `WithoutReasoning`), then its memory summary, written by that
-sampling. The model thus sees that it closed the node, and the context after a
-Close ends with the account of the node's work. All of this replaces the
-node's own suffix, so everything rendered before the node's first cell is
-unchanged. A birth node has no descriptor: its birth record is where the
-spawned branch starts. Inside an ancestor's memory a child renders as its
-memory slots only; the closing sampling belonged to the
-ancestor's work and folds with it. Other tool calls in the closing sampling
-stay visible with it.
+then its memory summary, so the context after a Close ends with the account of
+the node's work. The sampling that closed it folds with the node's work: shown,
+the model's own calls went from the node's start straight to `spine_close`, and
+models read that as a node closed with nothing done and redid the work. A host
+therefore refuses `spine_close` beside other tool calls, whose results would
+fold unseen. All of this replaces the node's own suffix, so everything rendered
+before the node's first cell is unchanged. A birth node has no descriptor: its
+birth record is where the spawned branch starts. Inside an ancestor's memory a
+child renders the same way.
 
 v3 removes v2's `terminal_results`, `SpawnResult` and `SpawnEvidence`; a v2
 client is rejected by the schema check.

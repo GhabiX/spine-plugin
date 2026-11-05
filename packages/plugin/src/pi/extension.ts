@@ -1154,6 +1154,7 @@ function controlToolAdmission(
     toolName as (typeof CONTROL_TOOLS)[number],
     enteredArrivals(ctx),
     (ctx.sessionManager.getHeader() as { birth?: number[] } | null)?.birth ?? null,
+    slot.current.lifecycle.responseCalls,
   );
   return reason === null ? undefined : { block: true, reason };
 }
