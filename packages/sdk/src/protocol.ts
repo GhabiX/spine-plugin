@@ -115,7 +115,7 @@ export type MemorySlot =
 
 export type ContextItem =
   | { Message: { message: Message; user_anchor: SafeInteger | null } }
-  /** `without_reasoning`: the sampling closed a node; its model output is labelled `WithoutReasoning`. */
+  /** `without_reasoning`: a node in view when the sampling was made, or the node its Next closed, has since folded; its model output is labelled `WithoutReasoning`. */
   | { SourceSpan: { span: RawSpan; without_reasoning?: boolean } }
   | {
       SyntheticNode: {
@@ -185,6 +185,8 @@ export interface SamplingCommit {
   post_boundary: EpochOrdinalId;
   previous_commit_id: NamespacedId | null;
   input_tokens?: SafeInteger;
+  /** Absent when the sampling completed. */
+  terminal?: Exclude<Terminal, "completed">;
   executions: CommittedSpineExecution[];
   source_digest?: Digest;
   record_digest?: Digest;
@@ -196,7 +198,8 @@ export type SamplingArchiveRecord =
 
 /**
  * `WithoutReasoning`: the model output now follows a prefix other than the
- * one it was sampled after (a kept reply, a sampling that closed a node).
+ * one it was sampled after (a kept reply, a sampling made before a node in its
+ * view folded).
  * Keep what it said and called; leave out its reasoning, the thinking and
  * the signatures bound to the old prefix.
  */

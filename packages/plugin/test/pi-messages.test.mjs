@@ -184,7 +184,7 @@ test("Pi shows a kept reply without its reasoning", () => {
   assert.equal(reply.content.length, 4);
 });
 
-test("Pi shows a sampling that closed a node without its reasoning, calls and results kept", () => {
+test("Pi shows a sampling labelled WithoutReasoning without its reasoning, calls and results kept", () => {
   const bindings = new PiSourceBindings();
   const source = (ordinal) => ({ thread: "pi-session", epoch: 0, ordinal });
   const closing = {

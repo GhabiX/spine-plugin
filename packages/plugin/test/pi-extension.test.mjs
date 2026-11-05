@@ -955,7 +955,7 @@ test("Spawn returns at once; children start after the commit and each arrives on
   await pi.emit("message_end", { type: "message_end", message: user("thanks") }, ctx.context);
   await sample(pi, ctx, [{ id: "close-1", name: "spine_close", input: { memory: "node memory" } }]);
   assert.equal(ctx.aborts, 0);
-  // The node shows as it was until the next sampling, which folds it.
+  // The node shows as it was until a sampling after it completes, which folds it.
   const report = await sample(pi, ctx, [], "report");
   assert.equal(contents(report.context).filter((text) => /narration inside the node/.test(text)).length, 1);
   const after = contents((await pi.emit("context", { type: "context", messages: [] }, ctx.context)).messages);
@@ -1262,7 +1262,7 @@ test("a child that cannot start arrives as errored without faulting the parent; 
   assert.match(ctx.notifications.at(-1)[0], /compaction waits for spawned children 1\.1 \(alpha\), 1\.2 \(beta\)/);
 });
 
-test("Open and Next results carry the node they open, numbered as the core numbers it; a transition appends, the next sampling folds", async () => {
+test("Open and Next results carry the node they open, numbered as the core numbers it; a transition appends, the next completed sampling folds", async () => {
   const pi = mockPi();
   const branch = recordBranch(pi);
   const ctx = extensionContext("pi-opened", { sessionFile: join(await mkdtemp(join(tmpdir(), "pi-spine-opened-")), "parent.jsonl"), branch });
@@ -1308,6 +1308,90 @@ test("Open and Next results carry the node they open, numbered as the core numbe
     assert.deepEqual(contexts[after].slice(0, start), contexts[before].slice(0, start));
     assert.equal(texts[after][start], descriptor(id, summary, "closed"));
   }
+  assert.equal(ctx.aborts, 0);
+});
+
+test("a request that fails after a close is no answer: its retry still has the node as it was, the next completed one folds it, and a resume agrees", async () => {
+  const sessionFile = join(await mkdtemp(join(tmpdir(), "pi-spine-retry-fold-")), "parent.jsonl");
+  const pi = mockPi();
+  const branch = recordBranch(pi);
+  const ctx = extensionContext("pi-retry-fold", { sessionFile, branch });
+  createPiExtension()(pi.api);
+  await pi.emit("session_start", { type: "session_start", reason: "new" }, ctx.context);
+  await pi.emit("message_end", { type: "message_end", message: user("request") }, ctx.context);
+  await sample(pi, ctx, [{ id: "open-a", name: "spine_open", input: { goal: "A" } }]);
+  await sample(pi, ctx, [], "a work");
+  await sample(pi, ctx, [{ id: "close-a", name: "spine_close", input: { memory: "memA" } }]);
+  // The request after the close fails in transport. Pi records an empty error
+  // reply and ends the turn, then omits that reply and retries.
+  const failed = await pi.emit("context", { type: "context", messages: [] }, ctx.context);
+  const error = { ...assistant([], "error"), errorMessage: "fetch failed" };
+  await pi.emit("message_end", { type: "message_end", message: error }, ctx.context);
+  await pi.emit("turn_end", { type: "turn_end", turnIndex: 0, message: error, toolResults: [] }, ctx.context);
+  const errorEntry = branch.find((entry) => entry.message === undefined ? false : entry.message.stopReason === "error");
+  branch.push({ type: "context_edit", id: "omit-error", parentId: branch.at(-1).id, timestamp: "9", targetId: errorEntry.id, replacement: null });
+  const closed = `<spine_node id="1.1" summary="A" status="closed">\n</spine_node>`;
+  // The retry is the failed request again: node 1.1 as it was, its close result last.
+  const retry = await sample(pi, ctx, [], "done");
+  assert.deepEqual(retry.context, failed.messages);
+  assert.equal(contents(retry.context).includes(closed), false);
+  assert.match(contents(retry.context).at(-1), /Node 1\.1 is closed/);
+  // The retry completed, so the request after it has 1.1 folded.
+  const after = await pi.emit("context", { type: "context", messages: [] }, ctx.context);
+  assert.equal(contents(after.messages).includes(closed), true);
+  assert.equal(contents(after.messages).some((text) => text.includes("Node 1.1 is closed")), false);
+  assert.equal(ctx.aborts, 0);
+  await cancelTurn(pi, ctx);
+  await pi.emit("session_shutdown", { type: "session_shutdown", reason: "quit" }, ctx.context);
+
+  const resumed = mockPi();
+  const resumedCtx = extensionContext("pi-retry-fold", { sessionFile, branch });
+  createPiExtension()(resumed.api);
+  await resumed.emit("session_start", { type: "session_start", reason: "resume" }, resumedCtx.context);
+  const replayed = await resumed.emit("context", { type: "context", messages: [] }, resumedCtx.context);
+  assert.deepEqual(replayed.messages, after.messages);
+  assert.equal(resumedCtx.aborts, 0);
+});
+
+test("a response whose tool the user stopped after a close keeps its reasoning while the node shows as it was, and loses it at the fold", async () => {
+  const pi = mockPi();
+  const branch = recordBranch(pi);
+  const ctx = extensionContext("pi-stop-fold", { sessionFile: join(await mkdtemp(join(tmpdir(), "pi-spine-stop-fold-")), "parent.jsonl"), branch });
+  createPiExtension()(pi.api);
+  await pi.emit("session_start", { type: "session_start", reason: "new" }, ctx.context);
+  await pi.emit("message_end", { type: "message_end", message: user("request") }, ctx.context);
+  await sample(pi, ctx, [{ id: "open-a", name: "spine_open", input: { goal: "A" } }]);
+  await sample(pi, ctx, [{ id: "close-a", name: "spine_close", input: { memory: "memA" } }]);
+  // The response after the close streams to its end (toolUse); the user stops
+  // its bash call while it runs, so the sampling is cancelled. Pi keeps the
+  // response and sends it in the next request.
+  await pi.emit("context", { type: "context", messages: [] }, ctx.context);
+  const call = assistant([
+    { type: "thinking", thinking: "check the listing", thinkingSignature: "sig" },
+    { type: "toolCall", id: "bash-1", name: "bash", arguments: { command: "ls" } },
+  ], "toolUse");
+  await pi.emit("message_end", { type: "message_end", message: call }, ctx.context);
+  await pi.emit("tool_call", { type: "tool_call", toolCallId: "bash-1", toolName: "bash", input: { command: "ls" } }, ctx.context);
+  const stop = new AbortController();
+  stop.abort();
+  ctx.context.signal = stop.signal;
+  const stopped = { content: [{ type: "text", text: "Command aborted" }], details: {}, isError: true };
+  await pi.emit("tool_result", { type: "tool_result", toolCallId: "bash-1", toolName: "bash", input: { command: "ls" }, ...stopped }, ctx.context);
+  await pi.emit("message_end", { type: "message_end", message: { role: "toolResult", toolCallId: "bash-1", toolName: "bash", ...stopped, timestamp: 3 } }, ctx.context);
+  await pi.emit("turn_end", { type: "turn_end", turnIndex: 0, message: call, toolResults: [] }, ctx.context);
+  ctx.context.signal = new AbortController().signal;
+  await pi.emit("message_end", { type: "message_end", message: user("go on") }, ctx.context);
+  const closed = `<spine_node id="1.1" summary="A" status="closed">\n</spine_node>`;
+  const sent = (messages) => messages.find((message) => message.role === "assistant" && message.content.some((part) => part.id === "bash-1"));
+  // Nothing folded yet: the stopped response goes out as it was, reasoning and all.
+  const unfolded = await sample(pi, ctx, [], "done");
+  assert.equal(contents(unfolded.context).includes(closed), false);
+  assert.deepEqual(sent(unfolded.context), call);
+  // That request completed and folded 1.1, so the stopped response now
+  // follows 1.1's memory and loses its reasoning.
+  const folded = await pi.emit("context", { type: "context", messages: [] }, ctx.context);
+  assert.equal(contents(folded.messages).includes(closed), true);
+  assert.deepEqual(sent(folded.messages).content, [call.content[1]]);
   assert.equal(ctx.aborts, 0);
 });
 

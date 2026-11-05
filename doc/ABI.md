@@ -77,16 +77,24 @@ assistant text and is kept, with user messages and arrivals, in the memory of
 the node that closes over it. A reply in the same sampling as a structural
 operation is rejected.
 
-A node just closed (by Close, or by Next) shows as it was until the next
-sampling, so the request after a Close only appends to the one before it and
-the model decides its next step with its own work in view. That sampling folds
-the node, and the folded node replaces the node's own suffix, so everything
+A node just closed (by Close, or by Next) shows as it was until a sampling
+after it completes, so the request after a Close only appends to the one before
+it and the model decides its next step with its own work in view. A sampling
+that failed or was cancelled is no answer: a retried request still shows the
+node as it was. The commit records how its sampling ended in
+`SamplingCommit.terminal`, present only when that is `failed` or `cancelled`,
+so replay folds where the live run folded. The completed sampling folds the
+node, and the folded node replaces the node's own suffix, so everything
 rendered before the node's first cell is unchanged. Folding at the Close
-itself made models doubt the memory and redo the node's work. The sampling
-that folds a node no longer follows the prefix it was sampled on, so it renders
-without reasoning where the provider ties reasoning to the prefix. Gemini does
-not, and requires its thought signatures on the function calls of its current
-turn, where that sampling sits; a Gemini output keeps its reasoning.
+itself made models doubt the memory and redo the node's work. A sampling made
+while the node was unfolded, and a Next's, which opens its node after the work
+of the node it closed, keep their reasoning while the node shows as it was;
+once it folds they no longer follow the prefix they were sampled on, so they
+render without reasoning where the provider ties reasoning to the prefix.
+Compact ends the old epoch's unfolded nodes: the new epoch starts from its
+replacement history. Gemini does not tie reasoning to the prefix, and requires
+its thought signatures on the function calls of its current turn, where those
+samplings sit; a Gemini output keeps its reasoning.
 The model reads a Spine call's result in that request, after the call has
 taken effect, so the result says what the call did: the node a Close or Next
 closed, after a Close where the model is now, and after an Open or Next the

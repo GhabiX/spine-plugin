@@ -168,8 +168,10 @@ own: it is in the result of the `spine_open` or `spine_next` call that opened
 it, since Gemini read a user message right after a function response as a new
 user turn and often returned `MALFORMED_RESPONSE`. Opening a node only appends
 to the request. A
-node just closed shows as it was until the next model request, which folds it,
-so closing a node also only appends to the request. A folded node starts with
+node just closed shows as it was until a model response after it completes; the
+request after that has it folded. A response that failed or was cancelled, such
+as one Pi retries, folds nothing. So closing a node also only appends to the
+request. A folded node starts with
 its descriptor, now `status="closed"` (its id and goal), then shows the user
 messages, replies and arrivals it keeps in the order they came, then its
 memory. The `spine_close` call folds with the node's work, and `spine_close`

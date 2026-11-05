@@ -2,8 +2,8 @@ import { freezeMessage, type Message } from "@deepseek-ai/dsh-llm";
 import { appendPluginRecord, type Session, type SessionSeq } from "@deepseek-ai/dsh-session";
 import type { SessionMessageProjection, SessionMessageProjectionContext } from "@deepseek-ai/dsh-session/surface";
 
-// A model output Spine moved behind another prefix (a sampling that closed a
-// node, a kept reply) loses its reasoning: what the Spine plan labels
+// A model output Spine moved behind another prefix (a sampling made with a
+// node in view that has since folded, a kept reply) loses its reasoning: what the Spine plan labels
 // `WithoutReasoning`. DSH keeps logged messages immutable, so the plugin logs
 // the decision and a message projection applies it, the same way for a live
 // session, a resumed one and a fork.
