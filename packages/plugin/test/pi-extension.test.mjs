@@ -955,6 +955,9 @@ test("Spawn returns at once; children start after the commit and each arrives on
   await pi.emit("message_end", { type: "message_end", message: user("thanks") }, ctx.context);
   await sample(pi, ctx, [{ id: "close-1", name: "spine_close", input: { memory: "node memory" } }]);
   assert.equal(ctx.aborts, 0);
+  // The node shows as it was until the next sampling, which folds it.
+  const report = await sample(pi, ctx, [], "report");
+  assert.equal(contents(report.context).filter((text) => /narration inside the node/.test(text)).length, 1);
   const after = contents((await pi.emit("context", { type: "context", messages: [] }, ctx.context)).messages);
   const once = (pattern) => after.filter((text) => pattern.test(text)).length;
   assert.equal(once(/<spine_spawn node_id="1\.1\.1" summary="alpha">/), 1);

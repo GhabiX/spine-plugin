@@ -163,11 +163,13 @@ descriptors, memory, births and arrivals are Pi custom messages, which Pi sends
 to every provider as user messages in place; kept replies are assistant
 messages. None of them is a system message, so no provider moves them into the
 initial system content, and opening a node only appends to the request. A
-closed node starts with its descriptor, now `status="closed"` (its id and
-goal), then shows the user messages, replies and arrivals it keeps in the order
-they came, then its memory, so the context ends with the account of the node's
-work. The `spine_close` call folds with the node's work, so `spine_close` must
-be the only tool call in its response. A birth record shows only the branch's id and
+node just closed shows as it was until the next model request, which folds it,
+so closing a node also only appends to the request. A folded node starts with
+its descriptor, now `status="closed"` (its id and goal), then shows the user
+messages, replies and arrivals it keeps in the order they came, then its
+memory. The `spine_close` call folds with the node's work, and `spine_close`
+must be the only tool call in its response, since its memory is written before
+other calls' results exist. A birth record shows only the branch's id and
 summary: the assignment is in the parent's own `spine_spawn` call and is
 addressed to the child.
 

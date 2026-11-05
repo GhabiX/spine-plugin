@@ -77,16 +77,21 @@ assistant text and is kept, with user messages and arrivals, in the memory of
 the node that closes over it. A reply in the same sampling as a structural
 operation is rejected.
 
-A closed task node starts with its descriptor, now `Closed`: its id and goal,
+A node just closed (by Close, or by Next) shows as it was until the next
+sampling, so the request after a Close only appends to the one before it and
+the model decides its next step with its own work in view. That sampling folds
+the node, and the folded node replaces the node's own suffix, so everything
+rendered before the node's first cell is unchanged. Folding at the Close
+itself made models doubt the memory and redo the node's work. The sampling
+that folds a node no longer follows the prefix it was sampled on, so it renders
+without reasoning.
+
+A folded task node starts with its descriptor, now `Closed`: its id and goal,
 where its folded work began. It then renders what it keeps in their original
 order (user messages, replies, births, arrivals and its children's memories),
-then its memory summary, so the context after a Close ends with the account of
-the node's work. The sampling that closed it folds with the node's work: shown,
-the model's own calls went from the node's start straight to `spine_close`, and
-models read that as a node closed with nothing done and redid the work. A host
-therefore refuses `spine_close` beside other tool calls, whose results would
-fold unseen. All of this replaces the node's own suffix, so everything rendered
-before the node's first cell is unchanged. A birth node has no descriptor: its
+then its memory summary. The sampling that closed it folds with the node's
+work. A host refuses `spine_close` beside other tool calls: the memory in
+`spine_close` is written before their results exist. A birth node has no descriptor: its
 birth record is where the spawned branch starts. Inside an ancestor's memory a
 child renders the same way.
 

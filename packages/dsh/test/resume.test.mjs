@@ -32,13 +32,18 @@ async function restart(before, after, drive) {
 test("a resumed session keeps its open node, user numbering and Close", async () => {
   const run = await restart(
     [[["spine_open", { goal: "A" }]], "replyA"],
-    [[["spine_close", { memory: "memA" }]], "done"],
-    (dsh, agent) => dsh.send(agent, "more"),
+    [[["spine_close", { memory: "memA" }]], "done", "ok"],
+    async (dsh, agent) => {
+      await dsh.send(agent, "more");
+      await dsh.send(agent, "last");
+    },
   );
-  assert.deepEqual(run.ends, ["completed", "completed"]);
+  assert.deepEqual(run.ends, ["completed", "completed", "completed"]);
+  const before = ["user: [U1]\nstart", "context: …", call("spine_open", { goal: "A" }), staged("spine_open"), node("1.1", "A"), "assistant: replyA", "user: [U2]\nmore"];
   assert.deepEqual(run.requests, [
-    ["user: [U1]\nstart", "context: …", call("spine_open", { goal: "A" }), staged("spine_open"), node("1.1", "A"), "assistant: replyA", "user: [U2]\nmore"],
-    ["user: [U1]\nstart", "context: …", closed("1.1", "A"), "assistant: replyA", "user: [U2]\nmore", memory("1.1", "memA")],
+    before,
+    [...before, call("spine_close", { memory: "memA" }), staged("spine_close")],
+    ["user: [U1]\nstart", "context: …", closed("1.1", "A"), "assistant: replyA", "user: [U2]\nmore", memory("1.1", "memA"), "assistant: done", "user: [U3]\nlast"],
   ]);
 });
 
@@ -139,14 +144,16 @@ test("a Stop after the response was logged: live and resumed sessions agree, and
     [
       ["start", [[["spine_open", { goal: "A" }]], "replyA"]],
       ["more", [[["spine_close", { memory: "mA" }]], "done"]],
+      ["last", ["ok"]],
     ],
     (dsh) => dsh.ctx.on("agent/turn-stopping", ({ agent }) => {
       const last = agent.session.snapshotEvents().findLast((event) => event.type === "assistant/message");
       if (last.data.message.content[0].text === "replyA") agent.cancel({ kind: "user" });
     }),
   );
-  assert.deepEqual(continuous.ends, ["aborted", "completed"]);
+  assert.deepEqual(continuous.ends, ["aborted", "completed", "completed"]);
   assert.deepEqual(restarted, continuous);
+  assert.ok(continuous.requests.at(-1).includes(memory("1.1", "mA")), "the node folded");
   assert.ok(continuous.requests.at(-1).includes("assistant: replyA"));
 });
 
@@ -154,10 +161,13 @@ test("a stream that ends without a finish chunk stopped by itself: its reply sur
   const { continuous, restarted } = await bothWays([
     ["start", [[["spine_open", { goal: "A" }]], { text: "replyA", finish: null }]],
     ["more", [[["spine_close", { memory: "mA" }]], "done"]],
+    ["last", ["ok"]],
   ]);
   assert.deepEqual(restarted, continuous);
+  assert.deepEqual(continuous.requests.at(-2), [...continuous.requests.at(-3), call("spine_close", { memory: "mA" }), staged("spine_close")]);
   assert.deepEqual(continuous.requests.at(-1), [
     "user: [U1]\nstart", "context: …", closed("1.1", "A"), "assistant: replyA", "user: [U2]\nmore", memory("1.1", "mA"),
+    "assistant: done", "user: [U3]\nlast",
   ]);
 });
 

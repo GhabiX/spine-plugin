@@ -25,18 +25,24 @@ async function scenario(replies, drive) {
   }
 }
 
-test("Open shows the node; Close shows its call, then its memory", async () => {
+test("Open shows the node; Close shows it with its call, then the next sampling folds it to its memory", async () => {
   const run = await scenario(
-    [[["spine_open", { goal: "inspect" }]], [["spine_close", { memory: "found it" }]], "done"],
-    (dsh) => dsh.run("start"),
+    [[["spine_open", { goal: "inspect" }]], [["spine_close", { memory: "found it" }]], "done", "ok"],
+    async (dsh) => {
+      const agent = await dsh.run("start");
+      await dsh.send(agent, "more");
+      return agent;
+    },
   );
-  assert.deepEqual(run.ends, ["completed"]);
+  assert.deepEqual(run.ends, ["completed", "completed"]);
   assert.deepEqual(run.requests, [
     ["user: [U1]\nstart", "context: …"],
     ["user: [U1]\nstart", "context: …", call("spine_open", { goal: "inspect" }), staged("spine_open"), node("1.1", "inspect")],
-    ["user: [U1]\nstart", "context: …", closed("1.1", "inspect"), memory("1.1", "found it")],
+    ["user: [U1]\nstart", "context: …", call("spine_open", { goal: "inspect" }), staged("spine_open"), node("1.1", "inspect"),
+      call("spine_close", { memory: "found it" }), staged("spine_close")],
+    ["user: [U1]\nstart", "context: …", closed("1.1", "inspect"), memory("1.1", "found it"), "assistant: done", "user: [U2]\nmore"],
   ]);
-  assert.equal(run.samplings, 3);
+  assert.equal(run.samplings, 4);
 });
 
 test("Next, nesting and a second user turn: Close keeps user messages, replies and child memories", async () => {
@@ -48,38 +54,55 @@ test("Next, nesting and a second user turn: Close keeps user messages, replies a
     [["spine_close", { memory: "memC" }]],
     [["spine_close", { memory: "memB" }]],
     "reply2",
+    "ok",
   ], async (dsh) => {
     const agent = await dsh.run("start");
     await dsh.send(agent, "more");
+    await dsh.send(agent, "last");
     return agent;
   });
-  assert.deepEqual(run.ends, ["completed", "completed"]);
+  assert.deepEqual(run.ends, ["completed", "completed", "completed"]);
   const next = [call("spine_next", { memory: "memA", goal: "B" }), staged("spine_next")];
-  assert.deepEqual(run.requests[2], ["user: [U1]\nstart", "context: …", closed("1.1", "A"), memory("1.1", "memA"), ...next, node("1.2", "B")]);
-  assert.deepEqual(run.requests[4], [
+  // Next shows A as it was; reply1, the next sampling, folds it.
+  assert.deepEqual(run.requests[2], [...run.requests[1], ...next, node("1.2", "B")]);
+  assert.deepEqual(run.requests[3], [
     "user: [U1]\nstart", "context: …", closed("1.1", "A"), memory("1.1", "memA"), ...next, node("1.2", "B"), "assistant: reply1",
-    "user: [U2]\nmore", call("spine_open", { goal: "C" }), staged("spine_open"), node("1.2.1", "C"),
+    "user: [U2]\nmore",
   ]);
+  assert.deepEqual(run.requests[4], [...run.requests[3], call("spine_open", { goal: "C" }), staged("spine_open"), node("1.2.1", "C")]);
+  assert.deepEqual(run.requests[5], [...run.requests[4], call("spine_close", { memory: "memC" }), staged("spine_close")]);
+  // Closing B right after C folds C and shows B as it was; reply2 folds B.
+  const closeB = [call("spine_close", { memory: "memB" }), staged("spine_close")];
   assert.deepEqual(run.requests[6], [
+    ...run.requests[3], closed("1.2.1", "C"), memory("1.2.1", "memC"), ...closeB,
+  ]);
+  assert.deepEqual(run.requests[7], [
     "user: [U1]\nstart", "context: …", closed("1.1", "A"), memory("1.1", "memA"), closed("1.2", "B"), "assistant: reply1", "user: [U2]\nmore", memory("1.2.1", "memC"),
-    memory("1.2", "memB"),
+    memory("1.2", "memB"), "assistant: reply2", "user: [U3]\nlast",
   ]);
 });
 
-test("a sampling that closed a node shows without its reasoning; the opening one keeps it", async () => {
+test("a Next sampling keeps its reasoning until the closed node folds; the folding sampling shows without it", async () => {
   const run = await scenario([
     { reasoning: "why open", calls: [["spine_open", { goal: "A" }]] },
     { reasoning: "why next", calls: [["spine_next", { memory: "memA", goal: "B" }], ["probe", {}]] },
+    { reasoning: "why probe", calls: [["probe", {}]] },
     "done",
   ], (dsh) => dsh.run("start"));
   assert.deepEqual(run.ends, ["completed"]);
   const open = `assistant: <reasoning>${call("spine_open", { goal: "A" }).slice("assistant: ".length)}`;
   assert.deepEqual(run.requests[1], ["user: [U1]\nstart", "context: …", open, staged("spine_open"), node("1.1", "A")]);
-  // The Next sampling belongs to node 1.2: its other result stays; it lost its reasoning.
-  assert.deepEqual(run.requests[2].slice(0, 5), ["user: [U1]\nstart", "context: …", closed("1.1", "A"), memory("1.1", "memA"),
-    "assistant: spine_next {\"memory\":\"memA\",\"goal\":\"B\"}probe {}"]);
-  assert.equal(run.requests[2].at(-1), node("1.2", "B"));
-  assert.equal(run.events.filter((event) => event.type === "plugin:spinejit/without-reasoning").length, 1);
+  // Next shows A as it was, so the Next sampling, which belongs to node 1.2,
+  // keeps its reasoning; its other result stays.
+  const results = [staged("spine_next"), "tool: Error: unknown tool \"probe\""];
+  const nextCall = "spine_next {\"memory\":\"memA\",\"goal\":\"B\"}probe {}";
+  assert.deepEqual(run.requests[2], [...run.requests[1], `assistant: <reasoning>${nextCall}`, ...results, node("1.2", "B")]);
+  // The next sampling folds A: it and the Next sampling show without their reasoning.
+  assert.deepEqual(run.requests[3], ["user: [U1]\nstart", "context: …", closed("1.1", "A"), memory("1.1", "memA"), `assistant: ${nextCall}`, ...results, node("1.2", "B"),
+    call("probe", {}), "tool: Error: unknown tool \"probe\""]);
+  // One decision, at the fold, names both.
+  const drops = run.events.filter((event) => event.type === "plugin:spinejit/without-reasoning");
+  assert.deepEqual(drops.map((event) => event.data.seqs.length), [2]);
 });
 
 const probeTool = {
@@ -99,13 +122,15 @@ test("runtime context DSH adds inside a node stays in place when the node closes
       return [["probe", {}]];
     },
     [["spine_close", { memory: "memA" }]],
+    [["probe", {}]],
     "done",
   ], (dsh) => dsh.run("start"));
   assert.deepEqual(run.ends, ["completed"]);
   assert.equal(run.requests[2].at(-1), "context: …", "DSH added runtime context inside node A");
-  assert.deepEqual(run.requests[3], [
+  assert.deepEqual(run.requests[3], [...run.requests[2], call("spine_close", { memory: "memA" }), staged("spine_close")]);
+  assert.deepEqual(run.requests[4], [
     "user: [U1]\nstart", "context: …", "context: …", closed("1.1", "A"),
-    memory("1.1", "memA"),
+    memory("1.1", "memA"), call("probe", {}), "tool: probed",
   ]);
 });
 
@@ -117,13 +142,15 @@ test("spine_close beside another tool call is a tool error; called alone it clos
       return [["spine_close", { memory: "memA" }], ["probe", {}]];
     },
     [["spine_close", { memory: "memA" }]],
+    [["probe", {}]],
     "done",
   ], (dsh) => dsh.run("start"));
   assert.deepEqual(run.ends, ["completed"]);
   const results = run.events.filter((event) => event.type === "tool/result").map((event) => event.data.message);
-  assert.deepEqual(results.map((message) => message.isError === true), [false, true, false, false]);
+  assert.deepEqual(results.map((message) => message.isError === true), [false, true, false, false, false]);
   assert.match(results[1].content[0].text, /spine_close must be the only tool call in its response/);
-  assert.deepEqual(run.requests[3], ["user: [U1]\nstart", "context: …", closed("1.1", "A"), memory("1.1", "memA")]);
+  assert.deepEqual(run.requests[3], [...run.requests[2], call("spine_close", { memory: "memA" }), staged("spine_close")]);
+  assert.deepEqual(run.requests[4], ["user: [U1]\nstart", "context: …", closed("1.1", "A"), memory("1.1", "memA"), call("probe", {}), "tool: probed"]);
 });
 
 test("a failed request and a cancelled one leave the plan as it was", async () => {
@@ -150,16 +177,18 @@ test("a failed request and a cancelled one leave the plan as it was", async () =
 
 test("text cut off at max tokens is no reply: Close folds it into the node", async () => {
   const run = await scenario(
-    [[["spine_open", { goal: "A" }]], { text: "partial", finish: "max-tokens" }, [["spine_close", { memory: "m" }]], "done"],
+    [[["spine_open", { goal: "A" }]], { text: "partial", finish: "max-tokens" }, [["spine_close", { memory: "m" }]], "done", "ok"],
     async (dsh) => {
       const agent = await dsh.run("start");
       await dsh.send(agent, "more");
+      await dsh.send(agent, "last");
       return agent;
     },
   );
-  assert.deepEqual(run.ends, ["max-tokens", "completed"]);
-  assert.deepEqual(run.requests[3], [
-    "user: [U1]\nstart", "context: …", closed("1.1", "A"), "user: [U2]\nmore", memory("1.1", "m"),
+  assert.deepEqual(run.ends, ["max-tokens", "completed", "completed"]);
+  assert.deepEqual(run.requests[3], [...run.requests[2], call("spine_close", { memory: "m" }), staged("spine_close")]);
+  assert.deepEqual(run.requests[4], [
+    "user: [U1]\nstart", "context: …", closed("1.1", "A"), "user: [U2]\nmore", memory("1.1", "m"), "assistant: done", "user: [U3]\nlast",
   ]);
 });
 

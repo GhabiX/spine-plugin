@@ -35,7 +35,7 @@ function afterArrivals(count, ...replies) {
 test("children start from the log before the Spawn; each arrival wakes the parent once", async () => {
   const [x, y] = [gate(), gate()];
   const dsh = await mountDsh({
-    "session-1": [[["spine_open", { goal: "A" }]], spawnXY, "waiting", "got x", [["spine_close", { memory: "m" }]], "done"],
+    "session-1": [[["spine_open", { goal: "A" }]], spawnXY, "waiting", "got x", [["spine_close", { memory: "m" }]], "done", "ok"],
     [X]: [x.after("x is 42")],
     [Y]: [y.after("y is 7")],
   });
@@ -47,6 +47,7 @@ test("children start from the log before the Spawn; each arrival wakes the paren
     y.open();
     await until(() => ends(dsh, "session-1").length === 3);
     await agent.whenIdle();
+    await dsh.send(agent, "thanks");
 
     const parent = requestsOf(dsh, "session-1");
     const births = [
@@ -56,13 +57,14 @@ test("children start from the log before the Spawn; each arrival wakes the paren
     ];
     assert.deepEqual(parent[3], [...parent[1], ...births, "assistant: waiting", arrival("1.1.1", "completed", "x is 42")]);
     assert.deepEqual(parent[4], [...parent[3], "assistant: got x", arrival("1.1.2", "completed", "y is 7")]);
-    // Close keeps the births and arrivals, as it keeps child memories; the
-    // replies given while a birth was unarrived only reported waiting.
-    assert.deepEqual(parent[5], [
+    assert.deepEqual(parent[5], [...parent[4], call("spine_close", { memory: "m" }), staged("spine_close")]);
+    // Once folded, the node keeps the births and arrivals, as it keeps child
+    // memories; the replies given while a birth was unarrived only reported waiting.
+    assert.deepEqual(parent[6], [
       "user: [U1]\nstart", "context: …", closed("1.1", "A"), ...births.slice(2), arrival("1.1.1", "completed", "x is 42"),
-      arrival("1.1.2", "completed", "y is 7"), memory("1.1", "m"),
+      arrival("1.1.2", "completed", "y is 7"), memory("1.1", "m"), "assistant: done", "user: [U2]\nthanks",
     ]);
-    assert.deepEqual(ends(dsh, "session-1"), ["completed", "completed", "completed"]);
+    assert.deepEqual(ends(dsh, "session-1"), ["completed", "completed", "completed", "completed"]);
 
     for (const [id, summary, peer] of [[X, "X", "Y"], [Y, "Y", "X"]]) {
       const [first] = requestsOf(dsh, id);
@@ -104,7 +106,7 @@ test("Close and a child's end wait for their children: a reply before they arriv
   const dsh = await mountDsh({
     "session-1": [
       [["spine_open", { goal: "A" }]], spawnXY, [["spine_close", { memory: "early" }]],
-      ...afterArrivals(2, [["spine_close", { memory: "m" }]], "done"),
+      ...afterArrivals(2, [["spine_close", { memory: "m" }]], "done", "ok"),
     ],
     [X]: [
       [["spine_spawn", { tasks: [{ summary: "X1", prompt: "a" }, { summary: "X2", prompt: "b" }] }]],
@@ -120,19 +122,23 @@ test("Close and a child's end wait for their children: a reply before they arriv
     y.open();
     await until(() => ends(dsh, "session-1").length === 3 && agent.status === "idle");
     await agent.whenIdle();
+    await dsh.send(agent, "thanks");
 
     const results = (id) => dsh.events(id).filter((event) => event.type === "tool/result").map((event) => event.data.message);
     const early = results("session-1")[2];
     assert.equal(early.isError, true);
     assert.match(early.content[0].text, /Spawned children 1\.1\.1 \(X\), 1\.1\.2 \(Y\) have not arrived/);
 
-    const last = requestsOf(dsh, "session-1").at(-1);
-    assert.deepEqual(last.slice(-1), [memory("1.1", "m")], "the memory ends the context");
-    assert.ok(last.findLastIndex((line) => line.startsWith("user: <spine_arrival")) < last.length - 1, "what the node keeps comes first");
-    assert.deepEqual(last.filter((line) => line.startsWith("user: <spine_arrival")).toSorted(), [
-      arrival("1.1.1", "completed", "x after X1 and X2"),
-      arrival("1.1.2", "completed", "I am done"),
-    ]);
+    const [unfolded, last] = requestsOf(dsh, "session-1").slice(-2);
+    assert.deepEqual(unfolded.slice(-2), [call("spine_close", { memory: "m" }), staged("spine_close")], "the node shows as it was");
+    assert.deepEqual(last.slice(-3), [memory("1.1", "m"), "assistant: done", "user: [U2]\nthanks"], "the memory ends the folded node");
+    assert.ok(last.findLastIndex((line) => line.startsWith("user: <spine_arrival")) < last.length - 3, "what the node keeps comes first");
+    for (const request of [unfolded, last]) {
+      assert.deepEqual(request.filter((line) => line.startsWith("user: <spine_arrival")).toSorted(), [
+        arrival("1.1.1", "completed", "x after X1 and X2"),
+        arrival("1.1.2", "completed", "I am done"),
+      ]);
+    }
     assert.deepEqual(ends(dsh, `${X}:spawn:1.1.1`), ["completed"]);
     assert.deepEqual(await dsh.restored(agent), agent.session.deriveMessages(), "official JSONL restore without Spine");
   } finally {
@@ -267,7 +273,7 @@ test("a child forked while earlier births are pending leaves them to its parent"
   const later = gate();
   const spawnZW = [["spine_spawn", { tasks: [{ summary: "Z", prompt: "find z" }, { summary: "W", prompt: "find w" }] }]];
   const dsh = await mountDsh({
-    "session-1": [[["spine_open", { goal: "A" }]], spawnXY, spawnZW, ...afterArrivals(4, [["spine_close", { memory: "m" }]], "done")],
+    "session-1": [[["spine_open", { goal: "A" }]], spawnXY, spawnZW, ...afterArrivals(4, [["spine_close", { memory: "m" }]], "done", "ok")],
     [X]: [later.after("x")],
     [Y]: [later.after("y")],
     "session-1:spawn:1.1.3": ["z"],
@@ -282,14 +288,18 @@ test("a child forked while earlier births are pending leaves them to its parent"
       assert.equal(requests[0].filter((line) => line.startsWith("user: <spine_arrival")).length, 0);
     }
     later.open();
-    await until(() => requestsOf(dsh, "session-1").at(-1).includes(memory("1.1", "m")) && agent.status === "idle");
-    const last = requestsOf(dsh, "session-1").at(-1);
-    assert.deepEqual(last.filter((line) => line.startsWith("user: <spine_arrival")).toSorted(), [
-      arrival("1.1.1", "completed", "x"),
-      arrival("1.1.2", "completed", "y"),
-      arrival("1.1.3", "completed", "z"),
-      arrival("1.1.4", "completed", "w"),
-    ]);
+    await until(() => requestsOf(dsh, "session-1").at(-1).includes(call("spine_close", { memory: "m" })) && agent.status === "idle");
+    await dsh.send(agent, "thanks");
+    const [unfolded, last] = requestsOf(dsh, "session-1").slice(-2);
+    assert.ok(last.includes(memory("1.1", "m")), "the next sampling folded the node");
+    for (const request of [unfolded, last]) {
+      assert.deepEqual(request.filter((line) => line.startsWith("user: <spine_arrival")).toSorted(), [
+        arrival("1.1.1", "completed", "x"),
+        arrival("1.1.2", "completed", "y"),
+        arrival("1.1.3", "completed", "z"),
+        arrival("1.1.4", "completed", "w"),
+      ]);
+    }
   } finally {
     await dsh.dispose();
   }
@@ -298,22 +308,28 @@ test("a child forked while earlier births are pending leaves them to its parent"
 test("a headless run ends only after the parent has taken its children's arrivals", async () => {
   const later = (reply) => () => new Promise((resolve) => setTimeout(() => resolve(reply), 50));
   const dsh = await mountDsh({
-    "session-1": [[["spine_open", { goal: "A" }]], spawnXY, "waiting", ...afterArrivals(2, [["spine_close", { memory: "m" }]], "x is 42, y is 7")],
+    "session-1": [[["spine_open", { goal: "A" }]], spawnXY, "waiting", ...afterArrivals(2, [["spine_close", { memory: "m" }]], "x is 42, y is 7", "ok")],
     [X]: [later("x is 42")],
     [Y]: [later("y is 7")],
   });
   try {
     const agent = await dsh.runHeadless("start");
-    const last = requestsOf(dsh, "session-1").at(-1);
-    assert.deepEqual(last.slice(-1), [memory("1.1", "m")], "the memory ends the context");
-    assert.ok(last.findLastIndex((line) => line.startsWith("user: <spine_arrival")) < last.length - 1, "what the node keeps comes first");
-    assert.deepEqual(last.filter((line) => line.startsWith("user: <spine_arrival")).toSorted(), [
-      arrival("1.1.1", "completed", "x is 42"),
-      arrival("1.1.2", "completed", "y is 7"),
-    ]);
+    const unfolded = requestsOf(dsh, "session-1").at(-1);
+    assert.deepEqual(unfolded.slice(-2), [call("spine_close", { memory: "m" }), staged("spine_close")], "the node shows as it was");
     const answer = agent.session.deriveMessages().at(-1);
     assert.equal(answer.role, "assistant");
     assert.equal(answer.content[0].text, "x is 42, y is 7");
+    // The answer folded the node; the next turn shows it folded.
+    await dsh.send(agent, "thanks");
+    const last = requestsOf(dsh, "session-1").at(-1);
+    assert.deepEqual(last.slice(-3), [memory("1.1", "m"), "assistant: x is 42, y is 7", "user: [U2]\nthanks"], "the memory ends the folded node");
+    assert.ok(last.findLastIndex((line) => line.startsWith("user: <spine_arrival")) < last.length - 3, "what the node keeps comes first");
+    for (const request of [unfolded, last]) {
+      assert.deepEqual(request.filter((line) => line.startsWith("user: <spine_arrival")).toSorted(), [
+        arrival("1.1.1", "completed", "x is 42"),
+        arrival("1.1.2", "completed", "y is 7"),
+      ]);
+    }
     assert.deepEqual(await dsh.restored(agent), agent.session.deriveMessages(), "official JSONL restore without Spine");
   } finally {
     await dsh.dispose();
