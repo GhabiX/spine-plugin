@@ -12,16 +12,21 @@ export function shown(request) {
   });
 }
 
-export const node = (id, summary) => `spine: <spine_node id="${id}" summary="${summary}" status="opened">\n</spine_node>`;
 export const closed = (id, summary) => `spine: <spine_node id="${id}" summary="${summary}" status="closed">\n</spine_node>`;
 export const memory = (id, body) => `spine: <spine_memory node_id="${id}">\n${body}\n</spine_memory>`;
 export const call = (name, input) => `assistant: ${name} ${JSON.stringify(input)}`;
-/** A Spine call's result; a close or next names the node it closed, a spawn its task count. */
-export const result = (name, arg = "1.1") => {
-  if (name === "spine_open") return "tool: The node is open.";
-  if (name === "spine_spawn") return `tool: Spine Spawn accepted ${arg} tasks. Each child starts when this turn ends, and its result arrives later as its own message. This node cannot close until all of them have arrived.`;
+const descriptor = (id, summary) => `<spine_node id="${id}" summary="${summary}" status="opened">\n</spine_node>`;
+/**
+ * A Spine call's result. Open names the node it opened (id, summary); Close
+ * the node it closed; Next the node it closed, then the one it opened; Spawn
+ * its task count.
+ */
+export const result = (name, ...args) => {
+  if (name === "spine_open") return `tool: The node is open.\n\n${descriptor(args[0], args[1])}`;
+  if (name === "spine_spawn") return `tool: Spine Spawn accepted ${args[0]} tasks. Each child starts when this turn ends, and its result arrives later as its own message. This node cannot close until all of them have arrived.`;
+  const [arg = "1.1", id, summary] = args;
   const closed = `Node ${arg} is closed and its memory is recorded.`;
-  if (name === "spine_next") return `tool: ${closed} The next node is open.`;
+  if (name === "spine_next") return `tool: ${closed} The next node is open.\n\n${descriptor(id, summary)}`;
   const parent = arg.split(".").slice(0, -1);
   return `tool: ${closed} ${parent.length === 1 ? "You are back at the root." : `You are back in node ${parent.join(".")}.`}`;
 };

@@ -34,7 +34,7 @@ function edited(surface, plan) {
   return after.map(({ role, seq, text }) => role === "spine" ? text ?? "·" : role === "host" ? `h${seq}` : seq);
 }
 
-test("Open puts the descriptor in the two slots in front of the opening response", () => {
+test("An item fills the slots in front of the source that follows it", () => {
   // system, U1, slots, A1, T1
   const surface = [host(0), source(1), slot(2), slot(3), source(4), source(5)];
   assert.deepEqual(edited(surface, [at(1, 1), item("node"), at(4), at(5)]), ["h0", 1, "node", 4, 5]);
@@ -49,7 +49,7 @@ test("Close replaces the closed span with its memory and keeps the user message 
   );
 });
 
-test("Next gives the memory the leading span and the new descriptor the last slot", () => {
+test("Two items take the leading span and the last slot", () => {
   const surface = [source(1), spine(10, "node A"), source(4), source(5), slot(6), slot(7), source(8), source(9)];
   assert.deepEqual(
     edited(surface, [at(1, 1), item("memory A"), item("node B"), at(8), at(9)]),

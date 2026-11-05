@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { mountDsh } from "./harness.mjs";
-import { arrival, call, memory, node, shown, result, closed } from "./shown.mjs";
+import { arrival, call, memory, shown, result, closed } from "./shown.mjs";
 
 const X = "session-1:spawn:1.1.1";
 const Y = "session-1:spawn:1.1.2";
@@ -349,6 +349,39 @@ test("a child beyond the subagent limit arrives errored and wakes the parent; th
     await until(() => arrivals().length === 1);
     assert.match(arrivals()[0], /outcome="errored"[\s\S]*subagent limit reached \(active child limit: 8\)/);
     await until(() => Object.keys(children).filter((id) => requestsOf(dsh, id).length === 1).length === 8);
+  } finally {
+    await dsh.dispose();
+  }
+});
+
+test("a node a call opens is described in the call's result, numbered after the births as the core numbers it", async () => {
+  const dsh = await mountDsh({
+    "session-1": [
+      [["spine_open", { goal: "A" }]], spawnXY, [["spine_open", { goal: "B" }]], [["spine_open", { goal: "C" }]],
+      [["spine_next", { memory: "memC", goal: "D" }]], [["spine_close", { memory: "memD" }]], [["spine_close", { memory: "memB" }]],
+      ...afterArrivals(2, [["spine_close", { memory: "memA" }]], "done", "ok"),
+    ],
+    [X]: ["x is 42"],
+    [Y]: ["y is 7"],
+  });
+  try {
+    const agent = await dsh.run("start");
+    await until(() => requestsOf(dsh, "session-1").some((request) => request.at(-1) === result("spine_close", "1.1")) && agent.status === "idle");
+    await dsh.send(agent, "thanks");
+    const parent = requestsOf(dsh, "session-1");
+    // 1.1 holds the births 1.1.1 and 1.1.2, so B is 1.1.3; C, opened in B, is 1.1.3.1; D, after C, 1.1.3.2.
+    const opened = [[1, "1.1", "A"], [3, "1.1.3", "B"], [4, "1.1.3.1", "C"], [5, "1.1.3.2", "D"]];
+    for (const [index, id, summary] of opened) {
+      // Arrivals may land anywhere after the Spawn, so find the result rather than take the last line.
+      const opening = summary === "D" ? result("spine_next", "1.1.3.1", id, summary) : result("spine_open", id, summary);
+      assert.ok(parent[index].includes(opening) && !parent[index - 1].includes(opening), `${summary} opens as ${id}`);
+      // Folded later, the core renders the same node under the same id.
+      assert.ok(parent.slice(index + 1).some((request) => request.includes(closed(id, summary))), `${id} folds as ${summary}`);
+    }
+    // No request carries an opened node's descriptor as an item of its own.
+    for (const request of parent) {
+      assert.deepEqual(request.filter((line) => line.startsWith("spine: <spine_node") && line.includes('status="opened"')), []);
+    }
   } finally {
     await dsh.dispose();
   }

@@ -1262,6 +1262,55 @@ test("a child that cannot start arrives as errored without faulting the parent; 
   assert.match(ctx.notifications.at(-1)[0], /compaction waits for spawned children 1\.1 \(alpha\), 1\.2 \(beta\)/);
 });
 
+test("Open and Next results carry the node they open, numbered as the core numbers it; a transition appends, the next sampling folds", async () => {
+  const pi = mockPi();
+  const branch = recordBranch(pi);
+  const ctx = extensionContext("pi-opened", { sessionFile: join(await mkdtemp(join(tmpdir(), "pi-spine-opened-")), "parent.jsonl"), branch });
+  pi.api.exec = async () => {
+    throw new Error("no children in this test");
+  };
+  createPiExtension()(pi.api);
+  await pi.emit("session_start", { type: "session_start", reason: "new" }, ctx.context);
+  await pi.emit("message_end", { type: "message_end", message: user("request") }, ctx.context);
+  const descriptor = (id, summary, status = "opened") => `<spine_node id="${id}" summary="${summary}" status="${status}">\n</spine_node>`;
+  const steps = [
+    [{ id: "open-a", name: "spine_open", input: { goal: "A" } }],
+    [{ id: "spawn-1", name: "spine_spawn", input: { tasks: SPAWN_TASKS } }],
+    [{ id: "open-b", name: "spine_open", input: { goal: "B" } }],
+    [{ id: "open-c", name: "spine_open", input: { goal: "C" } }],
+    [{ id: "next-d", name: "spine_next", input: { memory: "memC", goal: "D" } }],
+    [],
+    [{ id: "close-d", name: "spine_close", input: { memory: "memD" } }],
+    [],
+    [],
+  ];
+  // contexts[i] is what sampling i was made after.
+  const contexts = [];
+  for (const calls of steps) contexts.push((await sample(pi, ctx, calls, calls.length === 0 ? "work" : undefined)).context);
+  const texts = contexts.map(contents);
+  // 1.1 holds the births 1.1.1 and 1.1.2, so B is 1.1.3; C, opened in B, is 1.1.3.1; D, after C, 1.1.3.2.
+  assert.equal(texts[1].at(-1), `The node is open.\n\n${descriptor("1.1", "A")}`);
+  assert.equal(texts[3].at(-1), `The node is open.\n\n${descriptor("1.1.3", "B")}`);
+  assert.equal(texts[4].at(-1), `The node is open.\n\n${descriptor("1.1.3.1", "C")}`);
+  assert.equal(texts[5].at(-1), `Node 1.1.3.1 is closed and its memory is recorded. The next node is open.\n\n${descriptor("1.1.3.2", "D")}`);
+  // Only results carry an opened descriptor; no message of its own does.
+  for (const context of contexts) {
+    assert.deepEqual(context.filter((message) => message.role !== "toolResult" && contents([message])[0].includes('status="opened"')), []);
+  }
+  // Next and Close only append to the request before them.
+  assert.deepEqual(contexts[5].slice(0, contexts[4].length), contexts[4]);
+  assert.deepEqual(contexts[7].slice(0, contexts[6].length), contexts[6]);
+  // The sampling after each folds the closed node: the requests agree up to
+  // the node's start, where the core's closed descriptor, under the same id, begins.
+  for (const [before, after, call, id, summary] of [[5, 6, "open-c", "1.1.3.1", "C"], [7, 8, "next-d", "1.1.3.2", "D"]]) {
+    const start = contexts[before].findIndex((message) => message.role === "assistant" && message.content.some((part) => part.id === call));
+    assert.ok(start > 0);
+    assert.deepEqual(contexts[after].slice(0, start), contexts[before].slice(0, start));
+    assert.equal(texts[after][start], descriptor(id, summary, "closed"));
+  }
+  assert.equal(ctx.aborts, 0);
+});
+
 test("a Spawn child cannot close or leave the node it was spawned in, only nodes it opened", async () => {
   const pi = mockPi();
   // The child of birth 1.1.2 starts in 1.1, which its parent opened.
@@ -1350,7 +1399,8 @@ test("WASM-backed extension completes one Pi Open sampling transaction", async (
     ctx.context,
   );
   assert.equal(openResult.details.staged, true);
-  assert.equal(openResult.content[0].text, "The node is open.");
+  // The result carries the opened node's descriptor: the core numbers it 1.1 at the commit.
+  assert.equal(openResult.content[0].text, 'The node is open.\n\n<spine_node id="1.1" summary="inspect" status="opened">\n</spine_node>');
   await pi.emit(
     "tool_result",
     {
@@ -1396,9 +1446,9 @@ test("WASM-backed extension completes one Pi Open sampling transaction", async (
   assert.equal(pi.entries[0].data.record.type, "sampling_started");
   assert.equal(pi.entries[1].data.record.type, "sampling_commit");
   const after = await pi.emit("context", { type: "context", messages: [] }, ctx.context);
-  // The descriptor follows the sampling that opened the node: call, result, descriptor.
-  assert.deepEqual(after.messages.slice(1).map((message) => message.role), ["assistant", "toolResult", "custom"]);
-  assert.match(after.messages[3].content, /<spine_node id="1\.1" summary="inspect" status="opened">/);
+  // The descriptor is in the call's result; nothing follows the sampling that opened the node.
+  assert.deepEqual(after.messages.slice(1).map((message) => message.role), ["assistant", "toolResult"]);
+  assert.equal(after.messages[2].content[0].text, openResult.content[0].text);
   assert.equal(ctx.aborts, 0);
   // A close's result names the node it closed and where the model is then, from the tree the model saw.
   const closeResult = await pi.tools.get("spine_close").execute("close-1", { memory: "m" }, undefined, undefined, ctx.context);
@@ -2503,14 +2553,13 @@ test("Pi request materialization failure aborts instead of returning the last pu
   const ctx = extensionContext("materialization-fault", {
     branch: [{ type: "message", id: "user", message: original }],
   });
-  let runtime;
-  createPiExtension({ onSessionReady(info) { runtime = info.runtime; } })(pi.api);
+  createPiExtension()(pi.api);
   await pi.emit("session_start", { type: "session_start", reason: "new" }, ctx.context);
   const cached = await pi.emit("context", { type: "context", messages: [] }, ctx.context);
   assert.deepEqual(cached.messages, [user("[U1]\nevidence before failure")]);
   await cancelTurn(pi, ctx);
   const entriesBefore = structuredClone(pi.entries);
-  runtime.nodePrompt = () => { throw new Error("materialization unavailable"); };
+  ctx.context.sessionManager.getBranch = () => { throw new Error("materialization unavailable"); };
   const failed = await pi.emit("context", { type: "context", messages: cached.messages }, ctx.context);
   assert.deepEqual(failed, { messages: [] });
   assert.equal(ctx.aborts, 1);

@@ -38,17 +38,15 @@ export type SurfaceEdit =
 export function planItems(
   context: PublishedContext,
   seqOf: (id: EpochOrdinalId) => SessionSeq,
-  nodePrompt: string,
 ): PlanItem[] {
   const plan = context.contextPlan;
   if (plan === null) throw new SpineDshError("Spine published no context plan");
-  return plan.cells.map((cell) => planItem(cell, seqOf, nodePrompt));
+  return plan.cells.map((cell) => planItem(cell, seqOf));
 }
 
 function planItem(
   cell: ContextPlanCell,
   seqOf: (id: EpochOrdinalId) => SessionSeq,
-  nodePrompt: string,
 ): PlanItem {
   if (cell.type === "source") {
     const anchors = cell.labels.flatMap((label) => (label === "WithoutReasoning" ? [] : [label.UserAnchor]));
@@ -63,7 +61,7 @@ function planItem(
   const item = cell.item;
   if ("SyntheticNode" in item) {
     const { node_id: nodeId, summary, status } = item.SyntheticNode;
-    return { type: "spine", text: spineNodeText(nodeId, summary, status, nodePrompt) };
+    return { type: "spine", text: spineNodeText(nodeId, summary, status) };
   }
   if ("MemorySlot" in item) {
     const slot = item.MemorySlot;

@@ -16,15 +16,17 @@ loads it as the Cordis plugin `spinejit`.
   settles does not change the result.
 - Before each request streams, the plugin appends two empty developer slots.
   They derive no model message and leave room for what the sampling puts in
-  front of its response (a Next: the closed node's memory); Open and Close add
-  their text after it. The first is marked
+  front of its response (a Next: the closed node's memory); nothing follows
+  the response, since a node a call opens is described in that call's
+  result. The first is marked
   (`source.sampling`): it records in the log where the sampling began.
 - When the next step opens (`agent/request`), the plugin edits the surface into
   the plan the core last published, using standard surface replacements. The
   edits are a pure function of the surface and the plan (`src/projection.ts`),
   and the edited log restores with DSH alone, without this plugin.
-- Node descriptors, memory and birth records are user messages with source
-  `spine`. User messages get their `[U<n>]` number as they enter a step, so the
+- Folded node descriptors, memory and birth records are user messages with
+  source `spine`. An opened node's descriptor is in the result of the
+  `spine_open` or `spine_next` call that opened it. User messages get their `[U<n>]` number as they enter a step, so the
   transcript shows it too.
 - Host messages (the system prompt, tool registry changes and runtime context)
   are not Spine sources and stay where DSH puts them.

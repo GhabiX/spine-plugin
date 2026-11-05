@@ -3,14 +3,17 @@ import type { SpawnArrival, SpawnTask } from "../index.js";
 // The model-visible text of Spine context items. Every host renders the same
 // text, so a plan reads the same to the model whichever harness carries it.
 
-/** A node descriptor. Live and opened nodes carry the configured node prompt. */
+/**
+ * A node descriptor. An opened node's, in the result of the call that opened
+ * it, carries the configured node prompt; a folded node's is closed.
+ */
 export function spineNodeText(
   nodeId: readonly number[],
   summary: string,
   status: "Live" | "Opened" | "Closed" | "Compacted",
-  nodePrompt: string,
+  nodePrompt = "",
 ): string {
-  const prompt = status === "Live" || status === "Opened" ? nodePrompt.trim() : "";
+  const prompt = status === "Opened" ? nodePrompt.trim() : "";
   const inner = prompt.length > 0 ? `\n${prompt}\n` : "\n";
   return `<spine_node id="${nodeId.join(".")}" summary="${escapeXmlAttribute(summary)}" status="${status.toLowerCase()}">${inner}</spine_node>`;
 }

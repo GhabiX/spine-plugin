@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { mountDsh } from "./harness.mjs";
-import { call, memory, node, shown, result, closed } from "./shown.mjs";
+import { call, memory, shown, result, closed } from "./shown.mjs";
 
 /** Run `before` in one world, then resume the same session in a new one and run `after`. */
 async function restart(before, after, drive) {
@@ -39,7 +39,7 @@ test("a resumed session keeps its open node, user numbering and Close", async ()
     },
   );
   assert.deepEqual(run.ends, ["completed", "completed", "completed"]);
-  const before = ["user: [U1]\nstart", "context: …", call("spine_open", { goal: "A" }), result("spine_open"), node("1.1", "A"), "assistant: replyA", "user: [U2]\nmore"];
+  const before = ["user: [U1]\nstart", "context: …", call("spine_open", { goal: "A" }), result("spine_open", "1.1", "A"), "assistant: replyA", "user: [U2]\nmore"];
   assert.deepEqual(run.requests, [
     before,
     [...before, call("spine_close", { memory: "memA" }), result("spine_close")],
@@ -55,7 +55,7 @@ test("a failed sampling replays as failed: the Open it staged is not committed",
   );
   assert.deepEqual(run.ends, ["error", "completed"]);
   assert.deepEqual(run.requests, [
-    ["user: [U1]\nstart", "context: …", call("spine_open", { goal: "A" }), result("spine_open"), node("1.1", "A"), "user: [U2]\nagain"],
+    ["user: [U1]\nstart", "context: …", call("spine_open", { goal: "A" }), result("spine_open", "1.1", "A"), "user: [U2]\nagain"],
   ]);
 });
 
@@ -136,7 +136,7 @@ test("a Spine call whose result another extension turns into an error commits no
   );
   assert.deepEqual(restarted, continuous);
   assert.deepEqual(continuous.requests[1], ["user: [U1]\nstart", "context: …", call("spine_open", { goal: "A" }), "tool: blocked"]);
-  assert.ok(!continuous.requests.flat().includes(node("1.1", "A")));
+  assert.ok(!continuous.requests.flat().some((item) => item.includes('status="opened"')));
 });
 
 test("a Stop after the response was logged: live and resumed sessions agree, and its reply survives Close", async () => {

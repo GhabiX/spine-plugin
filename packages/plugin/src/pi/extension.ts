@@ -85,6 +85,7 @@ import {
   spineToolResult,
   unarrivedBirths,
   type SpawnBirth,
+  type SpineToolName,
 } from "@spinejit/spine-sdk/host";
 import {
   renderSpawnAccepted,
@@ -300,7 +301,7 @@ function registerSpineTools(
           const input = params as unknown as Record<string, unknown>;
           const tasks = decodeSpawnTasks(input);
           return {
-            content: [{ type: "text", text: spineToolResult(admittedProjection(slot), name, input) }],
+            content: [{ type: "text", text: admittedToolResult(slot, name, input) }],
             details: spawnAcceptedDetails(tasks),
           };
         },
@@ -323,7 +324,7 @@ function registerSpineTools(
       parameters: tool.parameters,
       renderShell: "self",
       async execute(_toolCallId, params) {
-        return toolResult(spineToolResult(admittedProjection(slot), name, params as unknown as Record<string, unknown>));
+        return toolResult(admittedToolResult(slot, name, params as unknown as Record<string, unknown>));
       },
       renderCall() {
         return linesComponent([]);
@@ -903,11 +904,9 @@ function materializeFromBranch(
   publication: PublishedContext,
   bindings: PiSourceBindings,
   branch: readonly PiBranchEntry[],
-  nodePrompt: string,
 ): PiAgentMessage[] {
   assignMissingPiSourceEntryIds(bindings, branch);
   return materializePiContext(publication, bindings, {
-    nodePrompt,
     projectedMessages: projectedPiMessages(branch),
   });
 }
@@ -969,7 +968,7 @@ async function initializeSession(
               pi.appendEntry(type, entry);
             },
             async materializeContext(context) {
-              return materializeFromBranch(context, bindings, ctx.sessionManager.getBranch(), runtime?.nodePrompt() ?? "");
+              return materializeFromBranch(context, bindings, ctx.sessionManager.getBranch());
             },
             async replaceContext(context) {
               const installed = structuredClone(context);
@@ -999,7 +998,7 @@ async function initializeSession(
       children: new SpawnChildren((arrival, wake) => deliverArrival(pi, slot, active, arrival, wake)),
       latestContext: initialContext,
       materializeMessages(branch: readonly PiBranchEntry[]) {
-        return materializeFromBranch(initialContext, recovered.bindings, branch, runtime!.nodePrompt());
+        return materializeFromBranch(initialContext, recovered.bindings, branch);
       },
     };
     if (onSessionReady && runtimeThread !== null) {
@@ -1461,9 +1460,9 @@ function disposeCurrent(slot: MutableSessionSlot): void {
 }
 
 /** The tree the model saw when it made the call being admitted. */
-function admittedProjection(slot: MutableSessionSlot): SpineProjection {
+function admittedToolResult(slot: MutableSessionSlot, name: SpineToolName, input: Record<string, unknown>): string {
   if (slot.current === null) throw new Error("a Spine tool ran before its session published a context");
-  return slot.current.latestContext.projection;
+  return spineToolResult(slot.current.latestContext.projection, name, input, slot.current.runtime.nodePrompt());
 }
 
 function toolResult(text: string) {

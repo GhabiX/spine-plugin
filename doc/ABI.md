@@ -89,9 +89,19 @@ not, and requires its thought signatures on the function calls of its current
 turn, where that sampling sits; a Gemini output keeps its reasoning.
 The model reads a Spine call's result in that request, after the call has
 taken effect, so the result says what the call did: the node a Close or Next
-closed, and after a Close where the model is now. An acknowledgement that only
-said the call was staged left models unsure whether the node had closed: they
-stopped, closed it again, or Gemini returned a malformed response.
+closed, after a Close where the model is now, and after an Open or Next the
+node it opened. An acknowledgement that only said the call was staged left
+models unsure whether the node had closed: they stopped, closed it again, or
+Gemini returned a malformed response.
+
+An open node has no descriptor item in the context. Its descriptor
+(`status="opened"`, with the configured node prompt) is in the result of the
+`spine_open` or `spine_next` call that opened it, inside the node's opening
+sampling; the host numbers it as the core does, the next child of its parent,
+births included. As an item of its own after the call's result, Gemini read it
+as a new user message: replaying 6 such requests 6 times each, 14 of 36 returned
+`MALFORMED_RESPONSE` and 3 were empty; with the descriptor in the result, 36 of
+36 answered.
 
 A folded task node starts with its descriptor, now `Closed`: its id and goal,
 where its folded work began. It then renders what it keeps in their original

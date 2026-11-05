@@ -246,7 +246,6 @@ export class PiSourceBindings {
 }
 
 export interface PiContextMaterializationOptions {
-  nodePrompt?: string;
   /** Model-visible messages for a session entry. An empty list omits that entry. */
   projectedMessages?: ReadonlyMap<string, readonly PiAgentMessage[]>;
 }
@@ -290,21 +289,20 @@ export function materializePiContext(
       messages.push(message);
       continue;
     }
-    messages.push(materializeProjection(cell, options.nodePrompt ?? ""));
+    messages.push(materializeProjection(cell));
   }
   return messages;
 }
 
 function materializeProjection(
   cell: Extract<ContextPlanCell, { type: "projection" }>,
-  nodePrompt: string,
 ): PiAgentMessage {
   const item = cell.item;
   if ("SyntheticNode" in item) {
     const { node_id: nodeId, summary, status } = item.SyntheticNode;
     return spineProjectionMessage(
       PI_SPINE_NODE_MESSAGE_TYPE,
-      spineNodeText(nodeId, summary, status, nodePrompt),
+      spineNodeText(nodeId, summary, status),
       {
         schema: "spine.pi.projection/v1",
         kind: "node",

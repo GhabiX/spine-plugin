@@ -66,7 +66,8 @@ Each extension activation reads one configuration snapshot for its tool catalog
 and default runtime. Tree navigation reuses it; `/new` and reload read the file
 again. A custom runtime factory remains responsible for its own configuration.
 
-The default node body is empty. Each projected `<spine_node>` still includes
+The default node body is empty. Each `<spine_node>` (an opened node's in the
+result of the call that opened it, a folded node's projected) still includes
 its identity, summary, and stable status; the global JIT prompt explains those
 boundaries once. An explicit nonempty `prompt.node` remains supported. Tool
 descriptions retain the operation and returned-memory guidance.
@@ -158,11 +159,15 @@ No release or publication is implied by this local development build.
 
 ## Provider message ordering
 
-Spine items stay at their projected positions in the conversation. Node
-descriptors, memory, births and arrivals are Pi custom messages, which Pi sends
-to every provider as user messages in place; kept replies are assistant
+Spine items stay at their projected positions in the conversation. Folded
+node descriptors, memory, births and arrivals are Pi custom messages, which Pi
+sends to every provider as user messages in place; kept replies are assistant
 messages. None of them is a system message, so no provider moves them into the
-initial system content, and opening a node only appends to the request. A
+initial system content. An opened node's descriptor is not a message of its
+own: it is in the result of the `spine_open` or `spine_next` call that opened
+it, since Gemini read a user message right after a function response as a new
+user turn and often returned `MALFORMED_RESPONSE`. Opening a node only appends
+to the request. A
 node just closed shows as it was until the next model request, which folds it,
 so closing a node also only appends to the request. A folded node starts with
 its descriptor, now `status="closed"` (its id and goal), then shows the user

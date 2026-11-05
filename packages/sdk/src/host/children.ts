@@ -1,5 +1,6 @@
-import type { SpawnArrival, SpawnTask, SpineProjection } from "../index.js";
-import { decodeSpineSpawnTasks, type SpineToolName } from "./tools.js";
+import type { NodeSnapshot, SpawnArrival, SpawnTask, SpineProjection } from "../index.js";
+import { spineNodeText } from "./render.js";
+import { operationFromSpineToolCall, type SpineToolName } from "./tools.js";
 import { toArrival } from "./spawn.js";
 
 /** A committed birth: the child's id, the task it was given, and where its sampling starts. */
@@ -69,22 +70,43 @@ export function spineToolRefusal(
  * The result of an admitted Spine call as the model reads it: what the call
  * has done once its sampling commits, which is before the model reads it.
  * The call is the only Spine call in its response, so the cursor at
- * admission fixes its effect. An opened node's descriptor follows the result;
- * spawned children start when the turn ends.
+ * admission fixes its effect. A node the call opens is described here, in
+ * the call's result, and nowhere else while it is open; spawned children
+ * start when the turn ends.
  */
-export function spineToolResult(projection: SpineProjection, name: SpineToolName, input: Record<string, unknown>): string {
-  if (name === "spine_spawn") {
-    const tasks = decodeSpineSpawnTasks(input);
-    return `Spine Spawn accepted ${tasks.length} tasks. Each child starts when this turn ends, and its result arrives later as its own message. This node cannot close until all of them have arrived.`;
+export function spineToolResult(
+  projection: SpineProjection,
+  name: SpineToolName,
+  input: Record<string, unknown>,
+  /** The configured node prompt an opened node's descriptor carries. */
+  nodePrompt: string,
+): string {
+  const operation = operationFromSpineToolCall(name, input);
+  if (operation.type === "spawn") {
+    return `Spine Spawn accepted ${operation.tasks.length} tasks. Each child starts when this turn ends, and its result arrives later as its own message. This node cannot close until all of them have arrived.`;
   }
-  if (name === "spine_open") return "The node is open.";
-  const cursor = projection.nodes.find((node) => sameId(node.id, projection.cursor));
-  if (cursor === undefined) throw new Error("Spine cursor is missing from the derived tree");
+  const cursor = findNode(projection, projection.cursor);
+  if (operation.type === "open") {
+    return `The node is open.\n\n${openedNodeText(cursor, operation.summary, nodePrompt)}`;
+  }
+  if (cursor.parent === null) throw new Error(`Spine node ${cursor.id.join(".")} has no parent`);
+  const parent = findNode(projection, cursor.parent);
   const closed = `Node ${cursor.id.join(".")} is closed and its memory is recorded.`;
-  if (name === "spine_next") return `${closed} The next node is open.`;
-  const parent = projection.nodes.find((node) => cursor.parent !== null && sameId(node.id, cursor.parent));
-  if (parent === undefined) throw new Error(`Spine node ${cursor.id.join(".")} has no parent in the derived tree`);
+  if (operation.type === "next") {
+    return `${closed} The next node is open.\n\n${openedNodeText(parent, operation.next_summary, nodePrompt)}`;
+  }
   return parent.kind === "RootEpoch" ? `${closed} You are back at the root.` : `${closed} You are back in node ${parent.id.join(".")}.`;
+}
+
+/** The descriptor of the node a call opens under `parent`: the core numbers it after the parent's children, Spawn births included. */
+function openedNodeText(parent: NodeSnapshot, summary: string, nodePrompt: string): string {
+  return spineNodeText([...parent.id, parent.children.length + 1], summary, "Opened", nodePrompt);
+}
+
+function findNode(projection: SpineProjection, id: readonly number[]): NodeSnapshot {
+  const node = projection.nodes.find((candidate) => sameId(candidate.id, id));
+  if (node === undefined) throw new Error(`Spine node ${id.join(".")} is missing from the derived tree`);
+  return node;
 }
 
 function sameId(left: readonly number[], right: readonly number[]): boolean {

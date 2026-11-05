@@ -121,7 +121,7 @@ export class SpineAgent {
         // Every fact a commit derives from is already in the session log.
         persistArchive: async () => {},
         context: {
-          materialize: async (context) => planItems(context, (id) => spine.#seqOf(id), spine.#nodePrompt),
+          materialize: async (context) => planItems(context, (id) => spine.#seqOf(id)),
           publishAtomic: async (context) => {
             spine.#plan = [...context.messages];
             spine.#projection = context.projection;
@@ -191,8 +191,8 @@ export class SpineAgent {
       const session = this.agent.session;
       await this.#begin(session.seq);
       // Two empty slots before the response: room for what this sampling
-      // puts in front of it (a Next: the closed node's memory); Open and Close
-      // add their text after it.
+      // puts in front of it (a Next: the closed node's memory). Nothing
+      // follows it: a node it opens is described in the call's result.
       // The first marks in the log where the sampling began.
       for (const message of [samplingSlot(), emptySlot()]) {
         session.append("developer/message", { turn: this.#turn, step: this.#step, message }, { surfaceOp: "append" });
@@ -215,7 +215,7 @@ export class SpineAgent {
     const refusal = spineToolRefusal(this.#projection!, name, this.#entered, sessionBirth(this.agent.id), this.#responseCalls(sampling.from));
     if (refusal !== null) throw new SpineDshError(refusal);
     sampling.called = name;
-    return spineToolResult(this.#projection!, name, args);
+    return spineToolResult(this.#projection!, name, args, this.#nodePrompt);
   }
 
   /** Settle the open sampling, if any, over its stretch of the log so far. */

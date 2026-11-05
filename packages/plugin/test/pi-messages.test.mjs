@@ -111,7 +111,7 @@ test("Pi renders only the canonical Spine-owned projection forms", () => {
       source_snapshot_digest: "source",
       cells: [
         projection({ SyntheticNode: {
-          node_id: [0, 1], summary: "child <scope>", status: "Opened",
+          node_id: [0, 1], summary: "child <scope>", status: "Closed",
         } }, 0),
         projection({ MemorySlot: { Summary: {
           owner_node: [0, 2], source: { start: 1, end: 2 }, body: "memory",
@@ -127,14 +127,12 @@ test("Pi renders only the canonical Spine-owned projection forms", () => {
     projection: { nodes: [], cursor: [0], visible_context: [], last_boundary: 0 },
   };
 
-  const messages = materializePiContext(context, bindings, {
-    nodePrompt: "KEEP subsequent work inside this branch.",
-  });
+  const messages = materializePiContext(context, bindings);
   assert.equal(messages[0].role, "custom");
   assert.equal(messages[0].customType, PI_SPINE_NODE_MESSAGE_TYPE);
   assert.equal(messages[0].details.kind, "node");
   assert.equal(messages[0].content,
-    '<spine_node id="0.1" summary="child &lt;scope&gt;" status="opened">\nKEEP subsequent work inside this branch.\n</spine_node>');
+    '<spine_node id="0.1" summary="child &lt;scope&gt;" status="closed">\n</spine_node>');
   assert.equal(messages[1].role, "custom");
   assert.equal(messages[1].customType, PI_SPINE_MEMORY_MESSAGE_TYPE);
   assert.equal(messages[1].details.kind, "memory");

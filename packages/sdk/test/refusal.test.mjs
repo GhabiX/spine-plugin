@@ -38,16 +38,33 @@ test("spine_close beside other tool calls is refused; alone it is admitted", () 
 
 test("a Spine call's result says what it has done, with the node it closed and where the model is now", () => {
   const nested = {
-    nodes: [node([1], "RootEpoch"), node([1, 1], "Task"), node([1, 1, 2], "Task")],
+    nodes: [node([1], "RootEpoch"), { ...node([1, 1], "Task"), children: [[1, 1, 1], [1, 1, 2]] }, node([1, 1, 1], "Spawn"), node([1, 1, 2], "Task")],
     cursor: [1, 1, 2], visible_context: [], last_boundary: null,
   };
-  assert.equal(spineToolResult(projection([1]), "spine_open", { goal: "A" }), "The node is open.");
-  assert.equal(spineToolResult(projection([1, 1]), "spine_close", { memory: "m" }),
+  assert.equal(spineToolResult(projection([1, 1]), "spine_close", { memory: "m" }, "P"),
     "Node 1.1 is closed and its memory is recorded. You are back at the root.");
-  assert.equal(spineToolResult(nested, "spine_close", { memory: "m" }),
+  assert.equal(spineToolResult(nested, "spine_close", { memory: "m" }, "P"),
     "Node 1.1.2 is closed and its memory is recorded. You are back in node 1.1.");
-  assert.equal(spineToolResult(projection([1, 1]), "spine_next", { memory: "m", goal: "B" }),
-    "Node 1.1 is closed and its memory is recorded. The next node is open.");
-  assert.match(spineToolResult(projection([1]), "spine_spawn", { tasks: [{ summary: "X", prompt: "x" }, { summary: "Y", prompt: "y" }] }),
+  assert.match(spineToolResult(projection([1]), "spine_spawn", { tasks: [{ summary: "X", prompt: "x" }, { summary: "Y", prompt: "y" }] }, "P"),
     /accepted 2 tasks.*arrives later as its own message.*cannot close until all of them have arrived/);
+});
+
+test("an Open or Next result carries the opened node's descriptor, numbered after its parent's children", () => {
+  const root = { ...node([1], "RootEpoch"), children: [[1, 1]] };
+  // 1.1 holds the birth 1.1.1 and the task 1.1.2: a node opened in it is 1.1.3, one after 1.1.2 is 1.1.3 too.
+  const parent = { ...node([1, 1], "Task"), children: [[1, 1, 1], [1, 1, 2]] };
+  const tree = (cursor) => ({
+    nodes: [root, parent, node([1, 1, 1], "Spawn"), node([1, 1, 2], "Task")],
+    cursor, visible_context: [], last_boundary: null,
+  });
+  const descriptor = (id, summary) => `<spine_node id="${id}" summary="${summary}" status="opened">\nWork here.\n</spine_node>`;
+  assert.equal(spineToolResult(tree([1]), "spine_open", { goal: "A" }, " Work here.\n"),
+    `The node is open.\n\n${descriptor("1.2", "A")}`);
+  assert.equal(spineToolResult(tree([1, 1]), "spine_open", { goal: "B & <C>" }, "Work here."),
+    `The node is open.\n\n${descriptor("1.1.3", "B &amp; &lt;C&gt;")}`);
+  assert.equal(spineToolResult(tree([1, 1, 2]), "spine_next", { memory: "m", goal: "D" }, "Work here."),
+    `Node 1.1.2 is closed and its memory is recorded. The next node is open.\n\n${descriptor("1.1.3", "D")}`);
+  // Without a node prompt the descriptor is empty, as a closed one.
+  assert.equal(spineToolResult(tree([1]), "spine_open", { goal: "A" }, ""),
+    `The node is open.\n\n<spine_node id="1.2" summary="A" status="opened">\n</spine_node>`);
 });
