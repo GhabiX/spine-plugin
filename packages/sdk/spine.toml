@@ -20,7 +20,7 @@ Memory adds what continuation needs beyond inherited context and retained child 
 
 Root coordinates; enter a branch before substantive work. Answer the user in any scope.
 
-After ownership is settled, batch compatible ready work. When a transition is needed, co-issue ready work for its destination. Use at most one spine_open, spine_close, or spine_next per model response. Ordinary tools in that response belong to the destination scope; results needed to finish the old scope must already be known.
+After ownership is settled, batch compatible ready work. Use at most one spine_open, spine_close, or spine_next per model response. With spine_open or spine_next, co-issue ready work for the destination: ordinary tools in that response belong to the destination scope, and results needed to finish the old scope must already be known. Call spine_close alone in its response.
 
 When multiple independent child scopes are identified, use spine_spawn when enabled; otherwise process them sequentially with spine_open and spine_next.
 </spine_instruction>
@@ -34,7 +34,7 @@ spawn_proactive = "Proactive MultiAgent collaboration is active. Any earlier ins
 description = "Enter a direct child for goal. Opening preserves context and leaves earlier work in its existing scope."
 
 [tools.close]
-description = "Finalize the local scope with memory and return to the immediate parent. Root cannot close."
+description = "Finalize the local scope with memory and return to the immediate parent. Call it as the only tool in its response. Root cannot close."
 
 [tools.next]
 description = "Finalize the local scope with memory and enter another child of the same parent for goal. Root cannot next."
