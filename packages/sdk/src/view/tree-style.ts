@@ -29,18 +29,28 @@ export function spineTreeBrand(text: string, theme: SpineTreeTheme): string {
   return `${SPINE_BRAND}${theme.bold(text)}${SPINE_BRAND_RESET}`;
 }
 
-export function spineTreeMarkerText(marker: string, theme: SpineTreeTheme): string {
+/** How a marker is colored: the brand for the current and the done, bold error or warning, else dim. */
+export type SpineTreeMarkerTone = "brand" | "error" | "warning" | "dim";
+
+export function spineTreeMarkerTone(marker: string): SpineTreeMarkerTone {
   switch (marker) {
     case "◉":
     case "✓":
-      return spineTreeBrand(marker, theme);
+      return "brand";
     case "×":
-      return theme.fg("error", theme.bold(marker));
+      return "error";
     case "!":
-      return theme.fg("warning", theme.bold(marker));
+      return "warning";
     default:
-      return theme.fg("dim", marker);
+      return "dim";
   }
+}
+
+export function spineTreeMarkerText(marker: string, theme: SpineTreeTheme): string {
+  const tone = spineTreeMarkerTone(marker);
+  if (tone === "brand") return spineTreeBrand(marker, theme);
+  if (tone === "dim") return theme.fg("dim", marker);
+  return theme.fg(tone, theme.bold(marker));
 }
 
 export function spineTreeMarker(

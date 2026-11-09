@@ -42,6 +42,9 @@ export const SPINE_FEATURES: FeatureFlag[] = ["jit", "spawn"];
  */
 export type BirthHandler = (births: readonly SpawnBirth[], prefixEnd: number) => Promise<void>;
 
+/** Hears each projection the agent publishes or commits live; the recovered one is `projection` once `create` returns. */
+export type ProjectionHandler = (projection: SpineProjection) => void;
+
 /**
  * One model response carries at most one Spine operation (the core admits one
  * per sampling). A second call is refused before it runs; the model sees a tool error.
@@ -83,6 +86,7 @@ export class SpineAgent {
   readonly agent: Agent;
   readonly #nodePrompt: string;
   readonly #born: BirthHandler;
+  readonly #changed: ProjectionHandler;
   #adapter!: SpineHostAdapter;
   /** Every session event seen, by seq. */
   readonly #events = new Map<number, SessionEvent>();
@@ -100,18 +104,24 @@ export class SpineAgent {
   #step = 0;
   #fault: unknown = null;
 
-  private constructor(agent: Agent, nodePrompt: string, born: BirthHandler) {
+  private constructor(agent: Agent, nodePrompt: string, born: BirthHandler, changed: ProjectionHandler) {
     this.agent = agent;
     this.#nodePrompt = nodePrompt;
     this.#born = born;
+    this.#changed = changed;
   }
 
-  static async create(agent: Agent, configToml: string, born: BirthHandler): Promise<SpineAgent> {
+  static async create(
+    agent: Agent,
+    configToml: string,
+    born: BirthHandler,
+    changed: ProjectionHandler,
+  ): Promise<SpineAgent> {
     const events = agent.session.snapshotEvents();
     // A forked session's inherited prefix is its parent's namespace.
     const thread = inheritedCut(events) === undefined ? agent.id : agent.session.header.parentSession!;
     const runtime = createNodeSpineRuntime({ thread, features: SPINE_FEATURES, configToml });
-    const spine = new SpineAgent(agent, runtime.nodePrompt(), born);
+    const spine = new SpineAgent(agent, runtime.nodePrompt(), born, changed);
     spine.#adapter = await createHostAdapter<PlanItem>({
       runtime: runtime.client,
       host: {
@@ -124,7 +134,7 @@ export class SpineAgent {
           materialize: async (context) => planItems(context, (id) => spine.#seqOf(id)),
           publishAtomic: async (context) => {
             spine.#plan = [...context.messages];
-            spine.#projection = context.projection;
+            spine.#project(context.projection);
           },
         },
       },
@@ -254,6 +264,11 @@ export class SpineAgent {
     this.#recovering = false;
   }
 
+  #project(projection: SpineProjection): void {
+    this.#projection = projection;
+    if (!this.#recovering) this.#changed(projection);
+  }
+
   /**
    * Observe the inherited sources and continue in this session's namespace.
    * Births the parent made stay its own to join.
@@ -301,7 +316,7 @@ export class SpineAgent {
       const result = await this.#adapter.finishSampling(outcome.terminal, outcome.inputTokens);
       this.#sampling = null;
       if (result.type !== "committed") return;
-      this.#projection = result.projection;
+      this.#project(result.projection);
       // The children a live Spawn bore start from the log before its sampling.
       if (!this.#recovering && call?.name === "spine_spawn") await this.#born(this.openBirths(), sampling.from);
     });

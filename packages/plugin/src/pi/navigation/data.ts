@@ -1,6 +1,6 @@
 import type { MemorySlot, NodeSnapshot } from "@spinejit/spine-sdk";
+import { spineTreeSpawnOutcome, type SpineTreeSpawnState } from "@spinejit/spine-sdk/view";
 import type { SpineTreeSnapshot } from "../tree-view-contract.js";
-import { spineTreeSpawnOutcome, type SpineTreeSpawnState } from "../tree-style.js";
 
 export interface NavigationNode {
   id: string;

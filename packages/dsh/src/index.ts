@@ -7,9 +7,11 @@ import { isSpineToolName, loadSpineConfigToml, SpawnChildren } from "@spinejit/s
 import { createNodeSpineRuntime, type SpineToolSpec } from "@spinejit/spine-sdk/node";
 
 import { SPINE_FEATURES, SpineAgent } from "./agent.js";
+import { TreeDisplay, treeProjection } from "./display.js";
 import { arrivalMessage, SpineDshError } from "./events.js";
 import { withoutReasoningProjection } from "./reasoning.js";
 import { executeChild, recoverChildren, spineSubagentProvider, type SpineWorld } from "./spawn.js";
+import { registerTreeView } from "./tui.js";
 
 /** The Cordis plugin DeepSeek Harness loads, by package name, from a bundle. */
 export const name = "spinejit";
@@ -35,6 +37,15 @@ export function apply(ctx: Context): void {
   ctx.systemPrompt.section({ name: "spinejit", order: ctx.systemPrompt.getSectionOrder("TOOLS_SDK"), text: prompt });
   for (const tool of tools) ctx.tools.register(spineTool(tool, agents));
 
+  // The tree each agent shows: a session projection for clients when the host
+  // has the registry, and status rows when dsh-tui is composed.
+  const display = new TreeDisplay();
+  ctx.inject(["sessionProjections"] as never, ((projectionCtx: Context) => {
+    (projectionCtx as unknown as { sessionProjections: { register(definition: unknown): unknown } })
+      .sessionProjections.register(treeProjection);
+  }) as never);
+  registerTreeView(ctx, display);
+
   ctx.on("session/event", (session, event) => {
     agents.get(session.id)?.accept(event);
   });
@@ -50,6 +61,7 @@ export function apply(ctx: Context): void {
       if (wake) agent.steer(arrivalMessage(arrival));
       else agent.inject(arrivalMessage(arrival));
     });
+    display.open(agent.session);
     const spine = await SpineAgent.create(agent, configToml, async (births, prefixEnd) => {
       const started: Promise<void>[] = [];
       own.launch(births, (birth, peers, signal) => {
@@ -58,9 +70,11 @@ export function apply(ctx: Context): void {
         return executeChild(world, agent, birth, peers, prefixEnd, signal, (arrival) => own.arrive(arrival), start);
       });
       await Promise.all(started);
-    });
+    }, (projection) => display.update(agent.session, projection));
     agents.set(agent.id, spine);
     children.set(agent.id, own);
+    // The recovered tree, recorded where the log has not, once the record's own event reaches the agent.
+    if (spine.projection !== null) display.update(agent.session, spine.projection);
     await recoverChildren(world, agent, spine.openBirths(), own);
     agent.ctx.effect(() => async () => {
       // Its children stop and deliver nothing; a resumed session recovers them.
@@ -70,6 +84,7 @@ export function apply(ctx: Context): void {
       await agent.whenIdle();
       agents.delete(agent.id);
       children.delete(agent.id);
+      display.close(agent.id);
       spine.dispose();
     });
   });

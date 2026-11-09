@@ -40,8 +40,8 @@ loads it as the Cordis plugin `spinejit`.
   did) with text and no tool call; text cut off at max tokens is an ordinary
   assistant message.
 - The session log is the only record of Spine state; the plugin writes no
-  archive of its own (DSH reserves plugin records for its own experimental
-  packages). A resumed session settles each sampling over the same stretch
+  archive of its own. The tree records below only show the tree; nothing
+  reads Spine state back from them. A resumed session settles each sampling over the same stretch
   of its log with the same code, or up to the end of the log. A
   session whose conversation started without this plugin is refused: its user
   messages carry no `[U#]`.
@@ -71,6 +71,21 @@ loads it as the Cordis plugin `spinejit`.
   returned as completed and any other open birth as aborted, without waking.
 - A forked session's inherited prefix is its parent's namespace: births the
   parent made there stay the parent's to join.
+
+## The tree on screen
+
+The tree Pi pins above its editor, drawn by the same code
+(`@spinejit/spine-sdk/view`), once the agent has opened a task:
+
+- In the terminal (dsh-tui), up to three status rows above the prompt, without
+  the header, always including the cursor's row (`◉`). They show the session
+  last created that is not a Spawn child, then the one `tui/session-switched`
+  names.
+- In the web and desktop client, the whole tree in the conversation input
+  dock (`dist/client.js`, built by `scripts/build-client.mjs`). The host
+  appends a `plugin:spinejit/tree` record (`{cursor, nodes}`) to a session's
+  log whenever what its tree shows changes, and the session projection
+  `spinejit` serves the latest one to clients.
 
 ## Not yet
 

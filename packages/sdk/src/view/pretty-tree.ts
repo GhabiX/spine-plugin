@@ -1,15 +1,5 @@
-import type { NodeSnapshot, SpineProjection } from "@spinejit/spine-sdk";
-
-import { clampLines } from "./tui-width.js";
+import type { NodeSnapshot, SpineProjection } from "../protocol.js";
 import {
-  spineTreeBranch,
-  spineTreeChildPrefix,
-  spineTreeBrand,
-  spineTreeLabel,
-  spineTreeMarker,
-  spineTreeMarkerText,
-} from "./tree-style.js";
-export {
   spineTreeBranch,
   spineTreeChildPrefix,
   spineTreeBrand,
@@ -82,7 +72,7 @@ export function formatPrettySpineTree(projection: SpineProjection): string[] {
 }
 
 export function formatPrettySpineTreeFromNodes(activeNodeId: string, nodes: readonly DisplayNode[]): string[] {
-  return renderPrettyLines(activeNodeId, nodes).map(plainPrettyLine);
+  return prettySpineTreeLines(activeNodeId, nodes).map(prettySpineTreeLineText);
 }
 
 export function formatThemedPrettySpineTreeFromNodes(
@@ -90,33 +80,28 @@ export function formatThemedPrettySpineTreeFromNodes(
   nodes: readonly DisplayNode[],
   theme: SpineTheme,
 ): string[] {
-  return renderPrettyLines(activeNodeId, nodes).map((line) => themePrettyLine(line, theme));
+  return prettySpineTreeLines(activeNodeId, nodes).map((line) => themePrettyLine(line, theme));
 }
 
 export function formatThemedPrettySpineTree(
   projection: SpineProjection,
   theme: SpineTheme,
 ): string[] {
-  return renderPrettyLines(formatNodeId(projection.cursor), displayNodesFromProjection(projection)).map((line) =>
+  return prettySpineTreeLines(formatNodeId(projection.cursor), displayNodesFromProjection(projection)).map((line) =>
     themePrettyLine(line, theme),
   );
 }
 
-export function linesComponent(lines: readonly string[]): { render: (width: number) => string[]; invalidate: () => void } {
-  return {
-    render: (width) => clampLines(lines, width),
-    invalidate() {},
-  };
-}
-
-type PrettyLine =
+/** One row of the pretty tree, before it is drawn; `current` marks the cursor's row. */
+export type PrettySpineTreeLine =
   | { type: "header" }
   | { type: "empty" }
   | { type: "history"; prefix: string; count: number }
-  | { type: "node"; prefix: string; marker: string; label: string };
+  | { type: "node"; prefix: string; marker: string; label: string; current: boolean };
 
-function renderPrettyLines(activeNodeId: string, nodes: readonly DisplayNode[]): PrettyLine[] {
-  const lines: PrettyLine[] = [{ type: "header" }];
+/** The pretty tree's rows for a front end that draws them itself; the first is the header. */
+export function prettySpineTreeLines(activeNodeId: string, nodes: readonly DisplayNode[]): PrettySpineTreeLine[] {
+  const lines: PrettySpineTreeLine[] = [{ type: "header" }];
   if (nodes.length === 0) {
     lines.push({ type: "empty" });
     return lines;
@@ -144,7 +129,7 @@ function renderPrettyLines(activeNodeId: string, nodes: readonly DisplayNode[]):
 }
 
 function appendPrettyNodes(
-  lines: PrettyLine[],
+  lines: PrettySpineTreeLine[],
   nodes: readonly DisplayNode[],
   activeNodeId: string,
   level: readonly DisplayNode[],
@@ -158,8 +143,8 @@ function appendPrettyNodes(
   );
   items.forEach((item, index) => {
     const isLast = index + 1 === items.length;
-    const branch = prettyBranch(isLast);
-    const childPrefix = `${prefix}${prettyChildPrefix(isLast)}`;
+    const branch = spineTreeBranch(isLast);
+    const childPrefix = `${prefix}${spineTreeChildPrefix(isLast)}`;
     if (item.type === "history") {
       lines.push({ type: "history", prefix: `${prefix}${branch}`, count: item.count });
       return;
@@ -169,8 +154,9 @@ function appendPrettyNodes(
     lines.push({
       type: "node",
       prefix: `${prefix}${branch}`,
-      marker: prettyMarker(item.node, current, children.length > 0),
-      label: prettyLabel(item.node, current),
+      marker: spineTreeMarker(item.node, current, children.length > 0),
+      label: spineTreeLabel(item.node, current),
+      current,
     });
     if (shouldCollapse(item.node, children.length > 0, activePath)) return;
     appendPrettyNodes(lines, nodes, activeNodeId, children, activePath, childPrefix, 0);
@@ -323,32 +309,16 @@ function mergeHistory(items: SiblingItem[]): SiblingItem[] {
   return merged;
 }
 
-function prettyMarker(node: DisplayNode, active: boolean, hasChildren: boolean): string {
-  return spineTreeMarker(node, active, hasChildren);
-}
-
-function prettyLabel(node: DisplayNode, active: boolean): string {
-  return spineTreeLabel(node, active);
-}
-
 function trimmedSummary(node: DisplayNode): string | null {
   const summary = node.summary?.trim();
   return summary === undefined || summary === "" ? null : summary;
-}
-
-function prettyBranch(isLast: boolean): string {
-  return spineTreeBranch(isLast);
-}
-
-function prettyChildPrefix(isLast: boolean): string {
-  return spineTreeChildPrefix(isLast);
 }
 
 function historyNoun(count: number): string {
   return count === 1 ? "branch" : "branches";
 }
 
-function plainPrettyLine(line: PrettyLine): string {
+export function prettySpineTreeLineText(line: PrettySpineTreeLine): string {
   switch (line.type) {
     case "header":
       return "• Spine Tree";
@@ -361,7 +331,7 @@ function plainPrettyLine(line: PrettyLine): string {
   }
 }
 
-function themePrettyLine(line: PrettyLine, theme: SpineTheme): string {
+function themePrettyLine(line: PrettySpineTreeLine, theme: SpineTheme): string {
   switch (line.type) {
     case "header":
       return `${theme.fg("dim", "• ")}${spineBrand("Spine Tree", theme)}`;
@@ -373,10 +343,7 @@ function themePrettyLine(line: PrettyLine, theme: SpineTheme): string {
       return `${theme.fg("dim", line.prefix)}${theme.fg("dim", "◌ ")}${theme.fg("dim", label)}`;
     }
     case "node":
-      return `${theme.fg("dim", line.prefix)}${themeMarker(line.marker, theme)} ${line.label}`;
+      return `${theme.fg("dim", line.prefix)}${spineTreeMarkerText(line.marker, theme)} ${line.label}`;
   }
 }
 
-function themeMarker(marker: string, theme: SpineTheme): string {
-  return spineTreeMarkerText(marker, theme);
-}

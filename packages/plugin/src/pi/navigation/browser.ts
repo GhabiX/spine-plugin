@@ -8,7 +8,7 @@ import {
   spineTreeLabel,
   spineTreeMarker,
   spineTreeMarkerText,
-} from "../tree-style.js";
+} from "@spinejit/spine-sdk/view";
 
 import type { NavigationData, NavigationNode } from "./data.js";
 

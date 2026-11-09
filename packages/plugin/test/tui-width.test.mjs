@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { clampLines, truncateToWidth, visibleWidth } from "../dist/pi/tui-width.js";
-import { linesComponent } from "../dist/pi/pretty-tree.js";
+import { clampLines, linesComponent, truncateToWidth, visibleWidth } from "../dist/pi/tui-width.js";
 
 test("visible width treats CJK as two columns and ignores ANSI", () => {
   assert.equal(visibleWidth("abc"), 3);

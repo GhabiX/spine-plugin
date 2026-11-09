@@ -35,10 +35,6 @@
     "./pi/extension": {
       "types": "./dist/pi/extension.d.ts",
       "import": "./dist/pi/extension.js"
-    },
-    "./pi/tree-style": {
-      "types": "./dist/pi/tree-style.d.ts",
-      "import": "./dist/pi/tree-style.js"
     }
   },
   "files": [

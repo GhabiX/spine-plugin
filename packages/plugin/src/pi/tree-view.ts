@@ -6,7 +6,7 @@ import {
   formatThemedPrettySpineTree,
   prettySpineTreeHasTasks,
   type SpineTheme,
-} from "./pretty-tree.js";
+} from "@spinejit/spine-sdk/view";
 import type {
   SpineTreeView,
   SpineTreeViewEnd,

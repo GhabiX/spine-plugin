@@ -1,6 +1,7 @@
 import type { SpawnTask } from "@spinejit/spine-sdk";
+import { spineBrand, type SpineTheme } from "@spinejit/spine-sdk/view";
 
-import { linesComponent, spineBrand, type SpineTheme } from "./pretty-tree.js";
+import { linesComponent } from "./tui-width.js";
 
 const ACTIVITY_WORDS = [
   "Germinating",

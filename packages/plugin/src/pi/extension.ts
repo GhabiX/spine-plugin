@@ -68,9 +68,7 @@ import {
   type PiSourceBindings,
 } from "./messages.js";
 import { resolvePiInvocation } from "./invocation.js";
-import {
-  linesComponent,
-} from "./pretty-tree.js";
+import { linesComponent } from "./tui-width.js";
 import { buildPiReplayPlan, recoverPiSession, type PiBranchEntry, type PiReplaySource } from "./recovery.js";
 import { SpineTreeDisplay } from "./tree-view.js";
 import { SPINE_TREE_VIEW_REQUEST } from "./tree-view-contract.js";

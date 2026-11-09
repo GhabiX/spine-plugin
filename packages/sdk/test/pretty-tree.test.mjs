@@ -4,7 +4,9 @@ import test from "node:test";
 import {
   formatPrettySpineTreeFromNodes,
   formatThemedPrettySpineTreeFromNodes,
-} from "../dist/pi/pretty-tree.js";
+  prettySpineTreeLines,
+  prettySpineTreeLineText,
+} from "../dist/view/index.js";
 
 function node(nodeId, parentId, summary, status, kind = "Task", outcome = null) {
   return { nodeId, parentId, kind, status, summary, spawn: outcome === null ? null : { arrived: outcome } };
@@ -193,4 +195,15 @@ test("themed pretty tree keeps history dim and current node on success", () => {
   assert.equal(lines[1].includes("[success]"), false);
   assert.match(lines[2], /\[dim\]▾/);
   assert.match(lines[3], /\x1b\[92m◉\x1b\[39m/);
+});
+
+test("pretty tree rows mark only the cursor's row current and draw as the text tree", () => {
+  const nodes = [
+    node("1", null, "earlier work", "Closed"),
+    node("2", null, "current scope", "Opened"),
+    node("2.1", "2", "focused task", "Live"),
+  ];
+  const lines = prettySpineTreeLines("2.1", nodes);
+  assert.deepEqual(lines.map(prettySpineTreeLineText), formatPrettySpineTreeFromNodes("2.1", nodes));
+  assert.deepEqual(lines.filter((line) => line.type === "node").map((line) => line.current), [false, true]);
 });

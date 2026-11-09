@@ -50,6 +50,14 @@ export function clampLines(lines: readonly string[], width: number): string[] {
   return lines.map((line) => truncateToWidth(line, width));
 }
 
+/** A Pi TUI component that draws fixed rows, each clamped to the width. */
+export function linesComponent(lines: readonly string[]): { render: (width: number) => string[]; invalidate: () => void } {
+  return {
+    render: (width) => clampLines(lines, width),
+    invalidate() {},
+  };
+}
+
 function ansiLength(text: string, index: number): number {
   if (text.charCodeAt(index) !== 0x1b || index + 1 >= text.length) return 0;
   const next = text[index + 1];
