@@ -21,18 +21,28 @@ Less context, better results: in the Spine paper ([arXiv:2610.37224](https://arx
 
 ## Install
 
+**Pi**
+
 ```bash
 pi install npm:@spinejit/pi-spinejit
 ```
 
-That's it: start Pi 1.1.0 and the agent works in steps on its own. The tree above the input shows where it is; `/spine-tree` browses the tree and opens any step's memory. Details: [packages/plugin](packages/plugin/README.md).
+Start Pi 1.1.0 and the agent works in steps on its own. The tree above the input shows the current step; `/spine-tree` browses the tree and opens any step's memory. Details: [packages/plugin](packages/plugin/README.md).
 
-Upgrading from `@spinejit/spine-plugin`: run `pi remove npm:@spinejit/spine-plugin` first.
+If upgrading from `@spinejit/spine-plugin`, run `pi remove npm:@spinejit/spine-plugin` first.
+
+**DeepSeek Harness (DSH)**
+
+```bash
+dsh plugin --profile web add @spinejit/dsh-spinejit
+dsh web
+```
+
+Replace `web` with your profile name. The plugin disables DSH's compaction, tool-result pruning, and image offload because Spine manages the context. The tree appears in the input dock of the web and desktop clients, and above the prompt in a dsh-tui terminal. Details: [packages/dsh](packages/dsh/README.md).
 
 ## Also
 
 - **Codex user?** [SpineCodex](https://github.com/GhabiX/SpineCodex) is Codex with Spine built in.
-- **DeepSeek Harness:** a plugin is coming in [packages/dsh](packages/dsh/README.md).
 - More Pi plugins from us: [pi-background-job](https://github.com/GhabiX/pi-background-job) (background jobs that wake the agent), [pi-btw-cached](https://github.com/GhabiX/pi-btw-cached) (`/btw` side questions on the same cache), [pi-compact-tree](https://github.com/GhabiX/pi-compact-tree) (a compact terminal tree), [pi-timeout-policy](https://github.com/GhabiX/pi-timeout-policy) (one timeout policy for every tool).
 
 Building from source and design notes: [doc/DESIGN.md](doc/DESIGN.md). Apache-2.0.

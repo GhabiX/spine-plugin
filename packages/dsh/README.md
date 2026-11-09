@@ -4,6 +4,17 @@ SpineJIT context management for DeepSeek Harness (DSH), backed by the portable
 Spine SDK. It is developed against `@deepseek-ai/dsh` `0.2.1-rc.2`; a bundle
 loads it as the Cordis plugin `spinejit`.
 
+## Install
+
+Add the plugin to a DSH profile, then start that profile:
+
+```bash
+dsh plugin --profile web add @spinejit/dsh-spinejit
+dsh web
+```
+
+`dsh plugin --profile <name> add` installs the package into `$DSH_HOME/profiles/<name>` and adds it to the profile's bundles. Its bundle patch disables `compaction-basic`, `command-compact`, `tool-result-pruner`, and `image-offload` (since Spine owns the context) and inserts the `spinejit` plugin. Verify with `dsh <name> --dump-config | grep spinejit`. For terminal use, add it to a profile that includes `@deepseek-harness-tui/dsh-tui`.
+
 ## How it works
 
 - The model context is the DSH session surface. Each main-loop model request
@@ -78,9 +89,8 @@ The tree Pi pins above its editor, drawn by the same code
 (`@spinejit/spine-sdk/view`), once the agent has opened a task:
 
 - In the terminal (dsh-tui), up to three status rows above the prompt, without
-  the header, always including the cursor's row (`◉`). They show the session
-  last created that is not a Spawn child, then the one `tui/session-switched`
-  names.
+  the header, always including the cursor's row (`◉`). They show the
+  top-level session (not a Spawn child) opened or changed most recently.
 - In the web and desktop client, the whole tree in the conversation input
   dock (`dist/client.js`, built by `scripts/build-client.mjs`). The host
   appends a `plugin:spinejit/tree` record (`{cursor, nodes}`) to a session's
