@@ -83,19 +83,25 @@ export function formatThemedPrettySpineTreeFromNodes(
   return prettySpineTreeLines(activeNodeId, nodes).map((line) => themePrettyLine(line, theme));
 }
 
+/** `compactedHint` follows the compacted row: where the front end lets the user look back. */
 export function formatThemedPrettySpineTree(
   projection: SpineProjection,
   theme: SpineTheme,
+  options: { compactedHint?: string } = {},
 ): string[] {
   return prettySpineTreeLines(formatNodeId(projection.cursor), displayNodesFromProjection(projection)).map((line) =>
-    themePrettyLine(line, theme),
+    themePrettyLine(line, theme, options.compactedHint),
   );
 }
 
-/** One row of the pretty tree, before it is drawn; `current` marks the cursor's row. */
+/**
+ * One row of the pretty tree, before it is drawn; `current` marks the cursor's row.
+ * `compacted` stands for an empty epoch after a compaction: `count` earlier branches folded away.
+ */
 export type PrettySpineTreeLine =
   | { type: "header" }
   | { type: "empty" }
+  | { type: "compacted"; count: number }
   | { type: "history"; prefix: string; count: number }
   | { type: "node"; prefix: string; marker: string; label: string; current: boolean };
 
@@ -113,7 +119,9 @@ export function prettySpineTreeLines(activeNodeId: string, nodes: readonly Displ
   }
   const viewport = prettyViewport(activeNodeId, nodes, byId);
   if (viewport.rootNodes.length === 0) {
-    lines.push({ type: "empty" });
+    const compacted = viewport.earlierBranchCount > 0
+      && nodes.some((node) => node.kind === "RootEpoch" && node.status === "Compacted");
+    lines.push(compacted ? { type: "compacted", count: viewport.earlierBranchCount } : { type: "empty" });
     return lines;
   }
   appendPrettyNodes(
@@ -318,12 +326,18 @@ function historyNoun(count: number): string {
   return count === 1 ? "branch" : "branches";
 }
 
+function compactedLabel(count: number): string {
+  return `compacted · ${count} earlier ${historyNoun(count)}`;
+}
+
 export function prettySpineTreeLineText(line: PrettySpineTreeLine): string {
   switch (line.type) {
     case "header":
       return "• Spine Tree";
     case "empty":
       return "  └ (empty)";
+    case "compacted":
+      return `  └ ◌ ${compactedLabel(line.count)}`;
     case "history":
       return `${line.prefix}◌ ${line.count} earlier ${historyNoun(line.count)}`;
     case "node":
@@ -331,12 +345,16 @@ export function prettySpineTreeLineText(line: PrettySpineTreeLine): string {
   }
 }
 
-function themePrettyLine(line: PrettySpineTreeLine, theme: SpineTheme): string {
+function themePrettyLine(line: PrettySpineTreeLine, theme: SpineTheme, compactedHint?: string): string {
   switch (line.type) {
     case "header":
       return `${theme.fg("dim", "• ")}${spineBrand("Spine Tree", theme)}`;
     case "empty":
       return `${theme.fg("dim", "  └ ")}${theme.fg("dim", "(empty)")}`;
+    case "compacted": {
+      const hint = compactedHint === undefined ? "" : `${theme.fg("dim", " · ")}${theme.fg("accent", compactedHint)}`;
+      return `${theme.fg("dim", "  └ ◌ ")}${theme.fg("dim", compactedLabel(line.count))}${hint}`;
+    }
     case "history": {
       const noun = historyNoun(line.count);
       const label = `${line.count} earlier ${noun}`;

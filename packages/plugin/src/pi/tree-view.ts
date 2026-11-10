@@ -15,6 +15,8 @@ import type {
 import { clampLines } from "./tui-width.js";
 
 const WIDGET_KEY = "spine-tree";
+/** Where the widget's compacted row points: `/spine-tree` browses every epoch, the compacted ones too. */
+const COMPACTED_HINT = "/spine-tree to look back";
 
 type Contribution = {
   view: SpineTreeView;
@@ -149,7 +151,8 @@ export class SpineTreeDisplay {
     }
     try {
       return prettySpineTreeHasTasks(current.projection)
-        ? clampLines([...formatThemedPrettySpineTree(current.projection, theme), ""].slice(0, height), width)
+        ? clampLines([...formatThemedPrettySpineTree(current.projection, theme, { compactedHint: COMPACTED_HINT }), ""]
+          .slice(0, height), width)
         : [];
     } catch (error) {
       this.report(current.ctx, error);

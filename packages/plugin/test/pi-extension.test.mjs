@@ -2655,3 +2655,54 @@ test("Pi request materialization failure aborts instead of returning the last pu
   assert.deepEqual(pi.entries.filter(entry => entry.customType !== "spine.fault.v1"), entriesBefore);
   await pi.emit("session_shutdown", { type: "session_shutdown" }, ctx.context);
 });
+
+test("after a compaction the tree widget says the earlier branches were compacted and where to look back", async () => {
+  const branch = [];
+  const pi = mockPi();
+  const ctx = extensionContext("compact-tree", { branch });
+  ctx.context.model = { provider: "test", id: "test-model" };
+  ctx.context.modelRegistry = { async complete() { return { content: [{ type: "text", text: "summary" }] }; } };
+  const append = pi.api.appendEntry.bind(pi.api);
+  pi.api.appendEntry = (customType, data) => {
+    append(customType, data);
+    branch.push({ type: "custom", id: `custom-${branch.length}`, customType, data });
+  };
+  createPiExtension()(pi.api);
+  const record = async (message) => {
+    await pi.emit("message_end", { type: "message_end", message }, ctx.context);
+    branch.push({ type: "message", id: `m-${branch.length}`, message });
+  };
+  const toolTurn = async (id, name, input) => {
+    await pi.emit("context", { type: "context", messages: [] }, ctx.context);
+    const call = assistant([{ type: "toolCall", id, name, arguments: input }]);
+    await record(call);
+    await pi.emit("tool_call", { type: "tool_call", toolCallId: id, toolName: name, input }, ctx.context);
+    const out = await pi.tools.get(name).execute(id, input, undefined, undefined, ctx.context);
+    const result = { role: "toolResult", toolCallId: id, toolName: name, content: out.content, details: out.details, isError: false, timestamp: 3 };
+    await pi.emit("tool_result", { type: "tool_result", toolCallId: id, toolName: name, input, content: out.content, details: out.details, isError: false }, ctx.context);
+    await record(result);
+    await pi.emit("turn_end", { type: "turn_end", turnIndex: 0, message: call, toolResults: [result] }, ctx.context);
+  };
+  await pi.emit("session_start", { type: "session_start", reason: "new" }, ctx.context);
+  await record(user("request"));
+  await toolTurn("open-1", "spine_open", { goal: "inspect" });
+  await toolTurn("close-1", "spine_close", { memory: "inspected" });
+  await toolTurn("open-2", "spine_open", { goal: "fix" });
+  const rows = () => widgetLines(ctx.widgets.at(-1)).slice(1).map((row) => row.replace(/\x1b\[\d+m/g, ""));
+  assert.deepEqual(rows(), ["  ├ ✓ inspect", "  └ ◉ fix", ""]);
+
+  const result = await pi.emit("session_before_compact", {
+    type: "session_before_compact",
+    preparation: { firstKeptEntryId: branch.at(-1).id, messagesToSummarize: [], turnPrefixMessages: [], tokensBefore: 12,
+      settings: { enabled: true, reserveTokens: 16384, keepRecentTokens: 20000 } },
+    branchEntries: [...branch], signal: new AbortController().signal, reason: "manual", willRetry: false,
+  }, ctx.context);
+  assert.equal(result.compaction.summary, "summary");
+  // The new epoch is empty; the earlier one stays in the tree, compacted.
+  assert.deepEqual(rows(), [
+    "  └ ◌ compacted · 2 earlier branches · /spine-tree to look back",
+    "",
+  ]);
+  assert.equal(ctx.aborts, 0);
+  await pi.emit("session_shutdown", { type: "session_shutdown", reason: "quit" }, ctx.context);
+});

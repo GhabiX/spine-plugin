@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   formatPrettySpineTreeFromNodes,
+  formatThemedPrettySpineTree,
   formatThemedPrettySpineTreeFromNodes,
   prettySpineTreeLines,
   prettySpineTreeLineText,
@@ -206,4 +207,30 @@ test("pretty tree rows mark only the cursor's row current and draw as the text t
   const lines = prettySpineTreeLines("2.1", nodes);
   assert.deepEqual(lines.map(prettySpineTreeLineText), formatPrettySpineTreeFromNodes("2.1", nodes));
   assert.deepEqual(lines.filter((line) => line.type === "node").map((line) => line.current), [false, true]);
+});
+
+test("an empty epoch after a compaction says what was compacted, and the themed row takes the front end's hint", () => {
+  const nodes = [
+    rootEpoch("1", "root", "Compacted"),
+    node("1.1", "1", "inspect", "Closed"),
+    node("1.2", "1", "fix", "Compacted"),
+    node("1.2.1", "1.2", "test", "Closed"),
+    rootEpoch("2", "root", "Live"),
+  ];
+  assert.deepEqual(prettySpineTreeLines("2", nodes).slice(1), [{ type: "compacted", count: 2 }]);
+  assert.deepEqual(formatPrettySpineTreeFromNodes("2", nodes), ["• Spine Tree", "  └ ◌ compacted · 2 earlier branches"]);
+  const theme = { fg: (color, text) => `[${color}]${text}`, bold: (text) => text };
+  const projection = {
+    nodes: nodes.map((n) => ({
+      id: n.nodeId.split(".").map(Number), parent: n.parentId === null ? null : n.parentId.split(".").map(Number),
+      children: [], kind: n.kind, status: n.status, summary: n.summary, memory: null, spawn: null, start: 0, end: null,
+    })),
+    cursor: [2], visible_context: [], last_boundary: null,
+  };
+  assert.equal(formatThemedPrettySpineTree(projection, theme, { compactedHint: "/look" })[1],
+    "[dim]  └ ◌ [dim]compacted · 2 earlier branches[dim] · [accent]/look");
+  assert.equal(formatThemedPrettySpineTree(projection, theme)[1], "[dim]  └ ◌ [dim]compacted · 2 earlier branches");
+  // Once the new epoch has a task, the compacted branches are the usual history row.
+  assert.deepEqual(formatPrettySpineTreeFromNodes("2.1", [...nodes, node("2.1", "2", "next", "Live")]).slice(1),
+    ["  ├ ◌ 2 earlier branches", "  └ ◉ next"]);
 });
