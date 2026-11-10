@@ -139,22 +139,45 @@ test("each change of the shown tree is recorded once, a resumed session records 
   }
 });
 
-test("the client bundle loads in the module loader and draws the whole tree in the dock", async () => {
+test("a user bubble hides the [U<n>] line its text starts with, and only that", async () => {
+  const { client: { userAnchorRule: rule } } = await loadClient();
+  assert.deepEqual(rule.match("[U1]\nhow does it work?", 0), { id: "text", start: 0, end: 5, data: { text: "[U1]\n", display: "" } });
+  assert.deepEqual(rule.match("[U12]\n", 0), { id: "text", start: 0, end: 6, data: { text: "[U12]\n", display: "" } });
+  assert.equal(rule.match("[U1]\nhow", 5), undefined, "only at the start");
+  assert.equal(rule.match("see [U1]\nabove", 0), undefined);
+  assert.equal(rule.match("[U1] inline", 0), undefined, "the number is its own line");
+  assert.equal(rule.match("[Ux]\nnot a number", 0), undefined);
+  assert.equal(rule.match("plain", 0), undefined);
+});
+
+/** dist/client.js as the web client's module loader runs it, with a JSX runtime that builds plain objects. */
+async function loadClient() {
   const source = await readFile(new URL("../dist/client.js", import.meta.url), "utf8");
   let loaded;
   const window = { __ModuleLoader__: { load: (module) => { loaded = module; } } };
   new Function("window", source)(window);
-  assert.equal(loaded.id, "@spinejit/dsh-spinejit");
   const element = (key) => (type, props, elementKey) => ({ type, props, key: elementKey ?? null, kind: key });
   const required = [];
   const client = loaded.factory((name) => {
     required.push(name);
     return { jsx: element("jsx"), jsxs: element("jsxs") };
   });
+  return { id: loaded.id, client, required };
+}
+
+test("the client bundle loads in the module loader and draws the whole tree in the dock", async () => {
+  const { id, client, required } = await loadClient();
+  assert.equal(id, "@spinejit/dsh-spinejit");
   assert.deepEqual(required, ["react/jsx-runtime"]);
-  assert.deepEqual(client.inject, ["slots"]);
+  assert.deepEqual(client.inject, ["slots", "uiConversation"]);
   const registered = [];
-  client.apply({ slots: { inject: (_name, register) => register(), register: (entry, component) => registered.push([entry, component]) } });
+  const rules = [];
+  client.apply({
+    slots: { inject: (_name, register) => register(), register: (entry, component) => registered.push([entry, component]) },
+    uiConversation: { userText: { register: (rule) => { rules.push(rule); return () => {}; } } },
+    effect: (execute) => execute(),
+  });
+  assert.deepEqual(rules, [client.userAnchorRule], "the user-anchor rule is registered");
   assert.deepEqual(registered.map(([entry]) => entry), [{ name: "conversation.input.dock", id: "spinejit", order: 30, registrant: "@spinejit/dsh-spinejit" }]);
   const Dock = registered[0][1];
   assert.equal(Dock({ useProjection: () => undefined }), null);

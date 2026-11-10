@@ -37,8 +37,10 @@ dsh web
   and the edited log restores with DSH alone, without this plugin.
 - Folded node descriptors, memory and birth records are user messages with
   source `spine`. An opened node's descriptor is in the result of the
-  `spine_open` or `spine_next` call that opened it. User messages get their `[U<n>]` number as they enter a step, so the
-  transcript shows it too.
+  `spine_open` or `spine_next` call that opened it. User messages get their `[U<n>]` number as they enter a step, in
+  the logged message: DSH builds each request from the log right after logging
+  the step's messages, with no point between to change what the model is
+  sent. The web and desktop client show a user message without it (below).
 - Host messages (the system prompt, tool registry changes and runtime context)
   are not Spine sources and stay where DSH puts them.
 - Before a request streams, the plugin checks that the surface already shows
@@ -96,6 +98,12 @@ The tree Pi pins above its editor, drawn by the same code
   appends a `plugin:spinejit/tree` record (`{cursor, nodes}`) to a session's
   log whenever what its tree shows changes, and the session projection
   `spinejit` serves the latest one to clients.
+
+The web and desktop client also show each user message without the `[U<n>]`
+line it starts with, as Pi does: `dist/client.js` registers a user-text rule
+(`uiConversation.userText`) that hides it in the bubble. The log, the model's
+context and the message's copy keep it. The terminal (dsh-tui) has no such
+seam and still shows it.
 
 ## Not yet
 
