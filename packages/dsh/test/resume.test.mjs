@@ -1,10 +1,12 @@
 // A restarted process resumes a persisted session: Spine state comes back from
 // the session log alone, and the next request still shows the plan.
 import assert from "node:assert/strict";
+import { readdir, readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import test from "node:test";
 
 import { mountDsh } from "./harness.mjs";
-import { call, memory, shown, result, closed } from "./shown.mjs";
+import { call, memory, numbered, shown, result, closed } from "./shown.mjs";
 
 /** Run `before` in one world, then resume the same session in a new one and run `after`. */
 async function restart(before, after, drive) {
@@ -39,11 +41,11 @@ test("a resumed session keeps its open node, user numbering and Close", async ()
     },
   );
   assert.deepEqual(run.ends, ["completed", "completed", "completed"]);
-  const before = ["user: [U1]\nstart", "context: …", call("spine_open", { goal: "A" }), result("spine_open", "1.1", "A"), "assistant: replyA", "user: [U2]\nmore"];
+  const before = ["user: [U1]\nstart", "context: …", call("spine_open", { goal: "A" }), result("spine_open", "1.1", "A"), "assistant: replyA", "user: more"];
   assert.deepEqual(run.requests, [
     before,
-    [...before, call("spine_close", { memory: "memA" }), result("spine_close")],
-    ["user: [U1]\nstart", "context: …", closed("1.1", "A"), "assistant: replyA", "user: [U2]\nmore", memory("1.1", "memA"), "assistant: done", "user: [U3]\nlast"],
+    [...numbered(before, 2, "more"), call("spine_close", { memory: "memA" }), result("spine_close")],
+    ["user: [U1]\nstart", "context: …", closed("1.1", "A"), "assistant: replyA", "user: [U2]\nmore", memory("1.1", "memA"), "assistant: done", "user: last"],
   ]);
 });
 
@@ -55,9 +57,59 @@ test("a failed sampling replays as failed: the Open it staged is not committed",
   );
   assert.deepEqual(run.ends, ["error", "completed"]);
   assert.deepEqual(run.requests, [
-    ["user: [U1]\nstart", "context: …", call("spine_open", { goal: "A" }), result("spine_open", "1.1", "A"), "user: [U2]\nagain"],
+    ["user: [U1]\nstart", "context: …", call("spine_open", { goal: "A" }), result("spine_open", "1.1", "A"), "user: again"],
   ]);
 });
+
+test("a session dsh-spinejit 0.1.1 logged, with [U<n>] in the user text, resumes numbering each user message once", async () => {
+  const first = await mountDsh([[["spine_open", { goal: "A" }]], "replyA"]);
+  try {
+    await first.run("start");
+  } finally {
+    await first.dispose();
+  }
+  assert.equal(await asLoggedBy011(first.root), 1, "one user message rewritten");
+  const second = await mountDsh([[["spine_close", { memory: "memA" }]], "done"], { root: first.root });
+  try {
+    const agent = await second.resume("session-1");
+    await second.send(agent, "more");
+    const before = ["user: [U1]\nstart", "context: …", call("spine_open", { goal: "A" }), result("spine_open", "1.1", "A"), "assistant: replyA"];
+    assert.deepEqual(second.adapter.requests.map(shown), [
+      [...before, "user: more"],
+      [...before, "user: [U2]\nmore", call("spine_close", { memory: "memA" }), result("spine_close")],
+    ]);
+    assert.deepEqual(ends(agent), ["completed", "completed"]);
+    assert.deepEqual(await second.restored(agent), agent.session.deriveMessages(), "official JSONL restore without Spine");
+  } finally {
+    await second.dispose();
+  }
+});
+
+/**
+ * Rewrite the logs under `root` as dsh-spinejit 0.1.1 wrote them: each number
+ * in the user text, no user-anchors record (an ignorable record of no plugin
+ * keeps the seqs). Returns how many user messages it numbered.
+ */
+async function asLoggedBy011(root) {
+  let rewritten = 0;
+  const files = (await readdir(join(root, "sessions"), { recursive: true })).filter((name) => name.endsWith(".jsonl"));
+  for (const name of files) {
+    const path = join(root, "sessions", name);
+    const lines = (await readFile(path, "utf8")).split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    const anchors = new Map(lines.filter((line) => line.type === "plugin:spinejit/user-anchors")
+      .flatMap((line) => line.data.anchors.map(({ seq, anchor }) => [seq, anchor])));
+    for (const line of lines) {
+      if (line.type === "plugin:spinejit/user-anchors") line.type = "plugin:test/none";
+      if (line.type === "user/message" && anchors.has(line.seq)) {
+        const block = line.data.content.find((item) => item.type === "text");
+        block.text = `[U${anchors.get(line.seq)}]\n${block.text}`;
+        rewritten += 1;
+      }
+    }
+    await writeFile(path, lines.map((line) => JSON.stringify(line)).join("\n") + "\n");
+  }
+  return rewritten;
+}
 
 test("a session that started without Spine is refused, not adopted with unnumbered users", async () => {
   const first = await mountDsh(["hello"], { plugin: false });
@@ -164,10 +216,10 @@ test("a stream that ends without a finish chunk stopped by itself: its reply sur
     ["last", ["ok"]],
   ]);
   assert.deepEqual(restarted, continuous);
-  assert.deepEqual(continuous.requests.at(-2), [...continuous.requests.at(-3), call("spine_close", { memory: "mA" }), result("spine_close")]);
+  assert.deepEqual(continuous.requests.at(-2), [...numbered(continuous.requests.at(-3), 2, "more"), call("spine_close", { memory: "mA" }), result("spine_close")]);
   assert.deepEqual(continuous.requests.at(-1), [
     "user: [U1]\nstart", "context: …", closed("1.1", "A"), "assistant: replyA", "user: [U2]\nmore", memory("1.1", "mA"),
-    "assistant: done", "user: [U3]\nlast",
+    "assistant: done", "user: last",
   ]);
 });
 

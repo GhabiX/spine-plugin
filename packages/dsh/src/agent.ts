@@ -1,5 +1,5 @@
-import type { Agent, PreStepDecision } from "@deepseek-ai/dsh-agent";
-import { isAppendSurfaceEvent, type SessionEvent, type SessionSeq } from "@deepseek-ai/dsh-session";
+import type { Agent } from "@deepseek-ai/dsh-agent";
+import { isAppendSurfaceEvent, pluginRecordOf, type SessionEvent, type SessionSeq } from "@deepseek-ai/dsh-session";
 import type { EpochOrdinalId, FeatureFlag, SpineProjection, Terminal } from "@spinejit/spine-sdk";
 import {
   createHostAdapter,
@@ -14,9 +14,8 @@ import {
 } from "@spinejit/spine-sdk/host";
 import { createNodeSpineRuntime } from "@spinejit/spine-sdk/node";
 
+import { anchorOf, logAnchors, USER_ANCHORS, type UserAnchor } from "./anchors.js";
 import {
-  anchored,
-  anchorOf,
   arrivalOf,
   beginsSampling,
   emptySlot,
@@ -93,7 +92,11 @@ export class SpineAgent {
   /** Logged sources the core has not observed yet, in log order. */
   #unobserved: SessionEvent[] = [];
   readonly #sourceSeqs = new Map<string, SessionSeq>();
-  #userSources = 0;
+  /** Each user message's number, by seq: the n-th the user wrote in the log. */
+  readonly #userNumbers = new Map<SessionSeq, number>();
+  /** User messages numbered for the model: in a user-anchors record, or (0.1.1 and earlier) in their text. */
+  readonly #anchored = new Set<SessionSeq>();
+  readonly #anchorInText = new Set<SessionSeq>();
   #plan: PlanItem[] | null = null;
   #projection: SpineProjection | null = null;
   /** Births whose arrival is in the log, by producer. */
@@ -158,6 +161,18 @@ export class SpineAgent {
     if (this.#events.has(event.seq)) return;
     this.#events.set(event.seq, event);
     if (isAppendSurfaceEvent(event) && surfaceRole(event) === "source") this.#unobserved.push(event);
+    if (isUserSource(event)) {
+      const number = this.#userNumbers.size + 1;
+      this.#userNumbers.set(event.seq, number);
+      if (anchorOf(eventMessage(event)) === number) {
+        this.#anchored.add(event.seq);
+        this.#anchorInText.add(event.seq);
+      }
+    }
+    const record = pluginRecordOf(event);
+    if (record?.type === USER_ANCHORS) {
+      for (const { seq } of (record.data as { anchors: UserAnchor[] }).anchors) this.#anchored.add(seq);
+    }
     const arrival = arrivalOf(event);
     if (arrival !== null) this.#entered.add(arrival.producer.join("."));
   }
@@ -166,17 +181,6 @@ export class SpineAgent {
   openBirths(): SpawnBirth[] {
     if (this.#projection === null) return [];
     return unarrivedBirths(this.#projection).filter((birth) => !this.#entered.has(birth.producer.join(".")));
-  }
-
-  /** Number the user messages entering a step `[U<n>]` before they are logged. */
-  anchor(decision: PreStepDecision): PreStepDecision {
-    if (decision.kind !== "enter") return decision;
-    let anchor = this.#userSources + this.#unobserved.filter(isUserSource).length;
-    return {
-      ...decision,
-      messages: decision.messages.map((message) =>
-        message.source.kind === "user" ? anchored(message, ++anchor) : message),
-    };
   }
 
   /** A step opened: bring the surface to the published plan. */
@@ -199,6 +203,15 @@ export class SpineAgent {
       await this.#prepare();
       this.#assertSurfaceShowsPlan();
       const session = this.agent.session;
+      // The user messages this request is the first to carry, numbered for
+      // every later request. DSH built this one from the log right after
+      // logging them, with no point between, so it carries them as the user
+      // wrote them; the logged messages, which clients show, stay so.
+      const anchors = [...this.#userNumbers]
+        .filter(([seq]) => !this.#anchored.has(seq))
+        .map(([seq, anchor]) => ({ seq, anchor }));
+      logAnchors(session, anchors);
+      for (const { seq } of anchors) this.#anchored.add(seq);
       await this.#begin(session.seq);
       // Two empty slots before the response: room for what this sampling
       // puts in front of it (a Next: the closed node's memory). Nothing
@@ -250,7 +263,8 @@ export class SpineAgent {
       if (endsSampling(event) || event.seq === cut) await this.#settle(event.seq);
       if (event.seq === cut) await this.#guard(() => this.#continueNamespace(event.seq));
       this.accept(event);
-      if (isUserSource(event) && anchorOf(eventMessage(event)) === null) {
+      // With Spine, a user message is numbered before the model answers it.
+      if (event.type === "assistant/message" && [...this.#userNumbers.keys()].some((seq) => !this.#anchored.has(seq))) {
         throw new SpineDshError(`session ${this.agent.id} started without Spine: its user messages carry no [U#]`);
       }
       if (beginsSampling(event)) {
@@ -327,12 +341,11 @@ export class SpineAgent {
     const count = this.#unobserved.findIndex((event) => event.seq >= to);
     const events = this.#unobserved.splice(0, count < 0 ? this.#unobserved.length : count);
     if (events.length === 0) return 0;
-    const ids = await this.#adapter.observeSources(events.map(sourceCharacter));
+    const ids = await this.#adapter.observeSources(events.map((event) => sourceCharacter(event, this.#anchorInText.has(event.seq))));
     if (ids.length !== events.length) {
       throw new SpineDshError(`Spine admitted ${ids.length} sources for ${events.length} events`);
     }
     ids.forEach((id, index) => this.#sourceSeqs.set(sourceKey(id), events[index]!.seq));
-    this.#userSources += events.filter(isUserSource).length;
     return events.length;
   }
 
@@ -361,7 +374,11 @@ export class SpineAgent {
     });
   }
 
-  /** The request DSH just built is the published plan: no edit pending, and every anchor as numbered. */
+  /**
+   * The request DSH just built is the published plan: no edit pending, and
+   * every user message numbered as the plan numbers it, but those it is the
+   * first to carry, which it shows as the user wrote them.
+   */
   #assertSurfaceShowsPlan(): void {
     const plan = this.#plan!;
     const edits = surfaceEdits(this.#surface(), plan);
@@ -377,9 +394,11 @@ export class SpineAgent {
         }
       }
       if (item.anchor === null) continue;
-      const logged = anchorOf(eventMessage(this.#event(item.seq)));
-      if (logged !== item.anchor) {
-        throw new SpineDshError(`source ${item.seq} is U${item.anchor} in the Spine plan but logged as U${logged}`);
+      const shown = this.agent.session.deriveEventMessage(this.#event(item.seq));
+      const numbered = shown === null ? null : anchorOf(shown);
+      const expected = this.#anchored.has(item.seq) ? item.anchor : null;
+      if (numbered !== expected) {
+        throw new SpineDshError(`source ${item.seq} is U${item.anchor} in the Spine plan; the model should see U${expected} but sees U${numbered}`);
       }
     }
   }

@@ -7,6 +7,7 @@ import { isSpineToolName, loadSpineConfigToml, SpawnChildren } from "@spinejit/s
 import { createNodeSpineRuntime, type SpineToolSpec } from "@spinejit/spine-sdk/node";
 
 import { SPINE_FEATURES, SpineAgent } from "./agent.js";
+import { userAnchorsProjection } from "./anchors.js";
 import { TreeDisplay, treeProjection } from "./display.js";
 import { arrivalMessage, SpineDshError } from "./events.js";
 import { withoutReasoningProjection } from "./reasoning.js";
@@ -33,6 +34,7 @@ export function apply(ctx: Context): void {
   const children = new Map<string, SpawnChildren>();
   const world: SpineWorld = { ctx, agents, children, idle: new Map(), starting: new Map() };
   ctx.sessions.registerMessageProjection(withoutReasoningProjection);
+  ctx.sessions.registerMessageProjection(userAnchorsProjection);
   ctx.subagents.registerProvider(spineSubagentProvider(world.starting));
   ctx.systemPrompt.section({ name: "spinejit", order: ctx.systemPrompt.getSectionOrder("TOOLS_SDK"), text: prompt });
   for (const tool of tools) ctx.tools.register(spineTool(tool, agents));
@@ -102,7 +104,7 @@ export function apply(ctx: Context): void {
     const spine = agents.get(payload.agent.id);
     if (spine === undefined) return next();
     await spine.settle();
-    return spine.anchor(await next());
+    return next();
   }, { prepend: true });
   ctx.on("agent/request", async (payload, next) => {
     await agents.get(payload.agent.id)?.enterStep(payload.turn, payload.step);

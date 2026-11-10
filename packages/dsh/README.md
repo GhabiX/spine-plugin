@@ -37,10 +37,18 @@ dsh web
   and the edited log restores with DSH alone, without this plugin.
 - Folded node descriptors, memory and birth records are user messages with
   source `spine`. An opened node's descriptor is in the result of the
-  `spine_open` or `spine_next` call that opened it. User messages get their `[U<n>]` number as they enter a step, in
-  the logged message: DSH builds each request from the log right after logging
-  the step's messages, with no point between to change what the model is
-  sent. The web and desktop client show a user message without it (below).
+  `spine_open` or `spine_next` call that opened it.
+- The model sees each user message with its `[U<n>]` number in front, as in
+  Pi; the user does not. The logged message, which every client draws, stays
+  as the user wrote it. When a step opens, the plugin logs the numbers of the
+  user messages it carries in an ignorable `plugin:spinejit/user-anchors`
+  record, and a message projection puts each number in front of the message
+  the model reads, alike for a live session, a resumed one and a fork. DSH
+  builds a step's request from the log right after logging its messages, with
+  no point between, so that first request shows a new user message as the user
+  wrote it; every later request shows it numbered. Sessions logged by
+  dsh-spinejit 0.1.1 and earlier carry the number in the message text and
+  resume as they are.
 - Host messages (the system prompt, tool registry changes and runtime context)
   are not Spine sources and stay where DSH puts them.
 - Before a request streams, the plugin checks that the surface already shows
@@ -57,7 +65,7 @@ dsh web
   reads Spine state back from them. A resumed session settles each sampling over the same stretch
   of its log with the same code, or up to the end of the log. A
   session whose conversation started without this plugin is refused: its user
-  messages carry no `[U#]`.
+  messages were answered unnumbered.
 - Spawn: each child is a DSH subagent of its parent, started through the
   subagent service under the plugin's provider `spine`, so DSH owns its
   agent, capacity slot and teardown, and a host that waits for subagents
@@ -99,11 +107,10 @@ The tree Pi pins above its editor, drawn by the same code
   log whenever what its tree shows changes, and the session projection
   `spinejit` serves the latest one to clients.
 
-The web and desktop client also show each user message without the `[U<n>]`
-line it starts with, as Pi does: `dist/client.js` registers a user-text rule
-(`uiConversation.userText`) that hides it in the bubble. The log, the model's
-context and the message's copy keep it. The terminal (dsh-tui) has no such
-seam and still shows it.
+Sessions logged by dsh-spinejit 0.1.1 and earlier carry `[U<n>]` in the user
+text. For them the web and desktop client hide that line in the bubble:
+`dist/client.js` registers a user-text rule (`uiConversation.userText`). The
+terminal (dsh-tui) has no such seam and still shows it in those old sessions.
 
 ## Not yet
 

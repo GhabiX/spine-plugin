@@ -1,7 +1,6 @@
 import {
   createDeveloperMessage,
   createUserMessage,
-  freezeMessage,
   lastAssistantStreamChunk,
   type ContentBlock,
   type DeveloperMessage,
@@ -11,6 +10,8 @@ import {
 import { isAppendSurfaceEvent, type SessionEvent } from "@deepseek-ai/dsh-session";
 import type { SourceCharacter, SpawnArrival } from "@spinejit/spine-sdk";
 import { spineArrivalText } from "@spinejit/spine-sdk/host";
+
+import { withoutAnchor } from "./anchors.js";
 
 declare module "@deepseek-ai/dsh-llm" {
   interface MessageSourceMap {
@@ -69,8 +70,12 @@ export function isUserSource(event: SessionEvent): boolean {
   return event.type === "user/message" && event.data.source.kind === "user";
 }
 
-/** What the Spine core observes for one source event; the boundary is the event seq. */
-export function sourceCharacter(event: SessionEvent): SourceCharacter {
+/**
+ * What the Spine core observes for one source event; the boundary is the event
+ * seq. `anchorInText`: a user message logged by 0.1.1 or earlier, whose text
+ * starts with its own `[U<n>]`; the core sees it without the number.
+ */
+export function sourceCharacter(event: SessionEvent, anchorInText = false): SourceCharacter {
   const boundary = event.seq;
   if (event.type === "tool/result") return { type: "opaque", boundary };
   const arrival = arrivalOf(event);
@@ -81,35 +86,12 @@ export function sourceCharacter(event: SessionEvent): SourceCharacter {
     return { type: "message", boundary, role: isReply(event) ? "reply" : "assistant", content };
   }
   if (isUserSource(event)) {
-    return { type: "message", boundary, role: "user", content: content.replace(ANCHOR, "") };
+    return { type: "message", boundary, role: "user", content: anchorInText ? withoutAnchor(content) : content };
   }
   if (message.role === "user") {
     return { type: "message", boundary, role: "contextual_user", content };
   }
   throw new SpineDshError(`session event ${event.seq} (${event.type}) is not a Spine source`);
-}
-
-const ANCHOR = /^\[U(\d+)\]\n/;
-
-/** The user message with `[U<anchor>]` in front of its first text, as the Spine plan shows it. */
-export function anchored(message: UserMessage, anchor: number): UserMessage {
-  const prefix = `[U${anchor}]\n`;
-  const content = [...message.content];
-  const first = content.findIndex((block) => block.type === "text");
-  if (first < 0) {
-    content.unshift({ type: "text", text: prefix });
-  } else {
-    const block = content[first] as Extract<ContentBlock, { type: "text" }>;
-    content[first] = { type: "text", text: prefix + block.text };
-  }
-  return freezeMessage({ ...message, content });
-}
-
-/** The `[U<n>]` a logged message starts with, or null. */
-export function anchorOf(message: Message): number | null {
-  const first = message.content.find((block) => block.type === "text");
-  const match = first === undefined ? null : ANCHOR.exec((first as { text: string }).text);
-  return match === null ? null : Number(match[1]);
 }
 
 /** An empty developer message: on the surface, but derives no model message. */

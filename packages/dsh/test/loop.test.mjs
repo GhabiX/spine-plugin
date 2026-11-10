@@ -7,7 +7,7 @@ import test from "node:test";
 import { createUserMessage } from "@deepseek-ai/dsh-llm";
 
 import { mountDsh } from "./harness.mjs";
-import { call, memory, shown, result, closed } from "./shown.mjs";
+import { call, memory, numbered, shown, result, closed } from "./shown.mjs";
 
 async function scenario(replies, drive) {
   const dsh = await mountDsh(typeof replies === "function" ? replies(() => dsh) : replies);
@@ -36,12 +36,15 @@ test("Open shows the node; Close shows it with its call, then the next sampling 
   );
   assert.deepEqual(run.ends, ["completed", "completed"]);
   assert.deepEqual(run.requests, [
-    ["user: [U1]\nstart", "context: …"],
+    ["user: start", "context: …"],
     ["user: [U1]\nstart", "context: …", call("spine_open", { goal: "inspect" }), result("spine_open", "1.1", "inspect")],
     ["user: [U1]\nstart", "context: …", call("spine_open", { goal: "inspect" }), result("spine_open", "1.1", "inspect"),
       call("spine_close", { memory: "found it" }), result("spine_close")],
-    ["user: [U1]\nstart", "context: …", closed("1.1", "inspect"), memory("1.1", "found it"), "assistant: done", "user: [U2]\nmore"],
+    ["user: [U1]\nstart", "context: …", closed("1.1", "inspect"), memory("1.1", "found it"), "assistant: done", "user: more"],
   ]);
+  // The log, which clients show, keeps each user message as the user wrote it.
+  const users = run.events.filter((event) => event.type === "user/message" && event.data.source.kind === "user");
+  assert.deepEqual(users.map((event) => event.data.content[0].text), ["start", "more"]);
   assert.equal(run.samplings, 4);
 });
 
@@ -67,18 +70,19 @@ test("Next, nesting and a second user turn: Close keeps user messages, replies a
   assert.deepEqual(run.requests[2], [...run.requests[1], ...next]);
   assert.deepEqual(run.requests[3], [
     "user: [U1]\nstart", "context: …", closed("1.1", "A"), memory("1.1", "memA"), ...next, "assistant: reply1",
-    "user: [U2]\nmore",
+    "user: more",
   ]);
-  assert.deepEqual(run.requests[4], [...run.requests[3], call("spine_open", { goal: "C" }), result("spine_open", "1.2.1", "C")]);
+  const more = numbered(run.requests[3], 2, "more");
+  assert.deepEqual(run.requests[4], [...more, call("spine_open", { goal: "C" }), result("spine_open", "1.2.1", "C")]);
   assert.deepEqual(run.requests[5], [...run.requests[4], call("spine_close", { memory: "memC" }), result("spine_close", "1.2.1")]);
   // Closing B right after C folds C and shows B as it was; reply2 folds B.
   const closeB = [call("spine_close", { memory: "memB" }), result("spine_close", "1.2")];
   assert.deepEqual(run.requests[6], [
-    ...run.requests[3], closed("1.2.1", "C"), memory("1.2.1", "memC"), ...closeB,
+    ...more, closed("1.2.1", "C"), memory("1.2.1", "memC"), ...closeB,
   ]);
   assert.deepEqual(run.requests[7], [
     "user: [U1]\nstart", "context: …", closed("1.1", "A"), memory("1.1", "memA"), closed("1.2", "B"), "assistant: reply1", "user: [U2]\nmore", memory("1.2.1", "memC"),
-    memory("1.2", "memB"), "assistant: reply2", "user: [U3]\nlast",
+    memory("1.2", "memB"), "assistant: reply2", "user: last",
   ]);
 });
 
@@ -169,7 +173,7 @@ test("a failed request and a cancelled one leave the plan as it was", async () =
     });
     assert.deepEqual(run.ends, [typeof interrupt === "function" ? "aborted" : "error", "completed"]);
     assert.deepEqual(run.requests[2], [
-      "user: [U1]\nstart", "context: …", call("spine_open", { goal: "A" }), result("spine_open", "1.1", "A"), "user: [U2]\nagain",
+      "user: [U1]\nstart", "context: …", call("spine_open", { goal: "A" }), result("spine_open", "1.1", "A"), "user: again",
     ]);
     assert.equal(run.samplings, 3);
   }
@@ -186,9 +190,9 @@ test("text cut off at max tokens is no reply: Close folds it into the node", asy
     },
   );
   assert.deepEqual(run.ends, ["max-tokens", "completed", "completed"]);
-  assert.deepEqual(run.requests[3], [...run.requests[2], call("spine_close", { memory: "m" }), result("spine_close")]);
+  assert.deepEqual(run.requests[3], [...numbered(run.requests[2], 2, "more"), call("spine_close", { memory: "m" }), result("spine_close")]);
   assert.deepEqual(run.requests[4], [
-    "user: [U1]\nstart", "context: …", closed("1.1", "A"), "user: [U2]\nmore", memory("1.1", "m"), "assistant: done", "user: [U3]\nlast",
+    "user: [U1]\nstart", "context: …", closed("1.1", "A"), "user: [U2]\nmore", memory("1.1", "m"), "assistant: done", "user: last",
   ]);
 });
 

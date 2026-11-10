@@ -12,6 +12,13 @@ export function shown(request) {
   });
 }
 
+/**
+ * The request with the user message `text` numbered `[U<anchor>]`: as every
+ * request after the first to carry it shows it. The first shows it as the user
+ * wrote it.
+ */
+export const numbered = (request, anchor, text) =>
+  request.map((line) => line === `user: ${text}` ? `user: [U${anchor}]\n${text}` : line);
 export const closed = (id, summary) => `spine: <spine_node id="${id}" summary="${summary}" status="closed">\n</spine_node>`;
 export const memory = (id, body) => `spine: <spine_memory node_id="${id}">\n${body}\n</spine_memory>`;
 export const call = (name, input) => `assistant: ${name} ${JSON.stringify(input)}`;

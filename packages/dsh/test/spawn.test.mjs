@@ -62,7 +62,7 @@ test("children start from the log before the Spawn; each arrival wakes the paren
     // memories; the replies given while a birth was unarrived only reported waiting.
     assert.deepEqual(parent[6], [
       "user: [U1]\nstart", "context: …", closed("1.1", "A"), ...births.slice(2), arrival("1.1.1", "completed", "x is 42"),
-      arrival("1.1.2", "completed", "y is 7"), memory("1.1", "m"), "assistant: done", "user: [U2]\nthanks",
+      arrival("1.1.2", "completed", "y is 7"), memory("1.1", "m"), "assistant: done", "user: thanks",
     ]);
     assert.deepEqual(ends(dsh, "session-1"), ["completed", "completed", "completed", "completed"]);
 
@@ -70,10 +70,12 @@ test("children start from the log before the Spawn; each arrival wakes the paren
       const [first] = requestsOf(dsh, id);
       assert.deepEqual(first.slice(0, -2), parent[1], "the child sees what the parent's Spawn sampling saw");
       assert.equal(first.at(-1), "context: …");
-      assert.match(first.at(-2), new RegExp(`^user: \\[U2\\]\\nYou are a spawned execution branch[^]*You are: ${summary}\\n[^]*- ${peer}\\n`));
+      assert.match(first.at(-2), new RegExp(`^user: You are a spawned execution branch[^]*You are: ${summary}\\n[^]*- ${peer}\\n`));
       assert.deepEqual(ends(dsh, id), ["completed"]);
       const restored = shown({ messages: await dsh.restored(id) });
-      assert.deepEqual(restored.slice(0, first.length), first, "official JSONL restore of the child");
+      // Its first request showed the assignment as written; from then on the child numbers it.
+      const later = first.with(-2, first.at(-2).replace(/^user: /, "user: [U2]\n"));
+      assert.deepEqual(restored.slice(0, first.length), later, "official JSONL restore of the child");
     }
     assert.deepEqual(await dsh.restored(agent), agent.session.deriveMessages(), "official JSONL restore of the parent");
   } finally {
@@ -131,7 +133,7 @@ test("Close and a child's end wait for their children: a reply before they arriv
 
     const [unfolded, last] = requestsOf(dsh, "session-1").slice(-2);
     assert.deepEqual(unfolded.slice(-2), [call("spine_close", { memory: "m" }), result("spine_close")], "the node shows as it was");
-    assert.deepEqual(last.slice(-3), [memory("1.1", "m"), "assistant: done", "user: [U2]\nthanks"], "the memory ends the folded node");
+    assert.deepEqual(last.slice(-3), [memory("1.1", "m"), "assistant: done", "user: thanks"], "the memory ends the folded node");
     assert.ok(last.findLastIndex((line) => line.startsWith("user: <spine_arrival")) < last.length - 3, "what the node keeps comes first");
     for (const request of [unfolded, last]) {
       assert.deepEqual(request.filter((line) => line.startsWith("user: <spine_arrival")).toSorted(), [
@@ -188,7 +190,7 @@ test("stopping the parent stops its children: they arrive aborted and do not wak
     assert.deepEqual(last.slice(-3).toSorted(), [
       arrival("1.1.1", "aborted", "spawn child was cancelled"),
       arrival("1.1.2", "aborted", "spawn child was cancelled"),
-      "user: [U2]\ngo on",
+      "user: go on",
     ].toSorted());
     assert.deepEqual(ends(dsh, "session-1"), ["aborted", "completed"]);
     assert.deepEqual(await dsh.restored(parent), parent.session.deriveMessages(), "official JSONL restore without Spine");
@@ -237,7 +239,7 @@ test("a restarted parent reads each child's end from its log: none reruns or wak
       arrival("1.1.3", "errored", "403 insufficient balance"),
       arrival("1.1.4", "aborted", "the parent session restarted before this child returned"),
     ]);
-    assert.equal(request.at(-1), "user: [U2]\ncontinue");
+    assert.equal(request.at(-1), "user: continue");
     assert.deepEqual(await dsh.restored(agent), agent.session.deriveMessages(), "official JSONL restore without Spine");
   } finally {
     await dsh.dispose();
@@ -322,7 +324,7 @@ test("a headless run ends only after the parent has taken its children's arrival
     // The answer folded the node; the next turn shows it folded.
     await dsh.send(agent, "thanks");
     const last = requestsOf(dsh, "session-1").at(-1);
-    assert.deepEqual(last.slice(-3), [memory("1.1", "m"), "assistant: x is 42, y is 7", "user: [U2]\nthanks"], "the memory ends the folded node");
+    assert.deepEqual(last.slice(-3), [memory("1.1", "m"), "assistant: x is 42, y is 7", "user: thanks"], "the memory ends the folded node");
     assert.ok(last.findLastIndex((line) => line.startsWith("user: <spine_arrival")) < last.length - 3, "what the node keeps comes first");
     for (const request of [unfolded, last]) {
       assert.deepEqual(request.filter((line) => line.startsWith("user: <spine_arrival")).toSorted(), [
