@@ -1,53 +1,82 @@
-# Spine for Pi
+# Spine for Pi & DeepSeek Harness
 
-[![npm](https://img.shields.io/npm/v/@spinejit/pi-spinejit)](https://www.npmjs.com/package/@spinejit/pi-spinejit) [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
+[![arXiv](https://img.shields.io/badge/arXiv-2610.37224-b31b1b.svg)](https://arxiv.org/abs/2610.37224) [![pi-spinejit](https://img.shields.io/npm/v/@spinejit/pi-spinejit?label=%40spinejit%2Fpi-spinejit)](https://www.npmjs.com/package/@spinejit/pi-spinejit) [![dsh-spinejit](https://img.shields.io/npm/v/@spinejit/dsh-spinejit?label=%40spinejit%2Fdsh-spinejit)](https://www.npmjs.com/package/@spinejit/dsh-spinejit) [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
-English | [中文](README.zh-CN.md)
+English | [简体中文](README.zh-CN.md)
 
 **Your agent's context, shaped like its task.**
 
-A long task is a tree of subtasks, but an agent's context is a flat log: finished work, dead ends, and the current step pile up in one stream, leaving the agent to guess where each piece of work begins and ends. Spine aligns the context with the task tree. The agent opens each subtask with a goal and closes it with a memory; Spine keeps the current subtask in full and automatically folds each finished one into its memory.
+Long-horizon tasks unfold as nested subtasks, yet an agent's context is a flat linear stream where finished explorations and dead ends pile up alongside unfinished work. **Spine** places execution under a persistent work tree (**`SpineTree`**, acting as the structural spine of long-horizon work): the agent opens subtasks with explicit goals, switches or closes them locally (`Open`, `Close`, `Next`), and delegates parallel subtrees when needed (`Spawn`). Before each model call, Spine compiles `SpineTree` into minimal effective context—keeping active work in full while folding finished subtasks into their returned conclusions.
 
-![The Spine tree in Pi: each step of the task, and the memory a finished step left behind](doc/images/spine-tree.png)
-
-Less context, better results: in the Spine paper ([arXiv:2610.37224](https://arxiv.org/abs/2610.37224)), Pi with Spine scores 9.5–17.5% higher than plain Pi on SWE-Milestone; with Gemini 3.8 Flash, it also costs 45% less.
+In the Spine paper ([arXiv:2610.37224](https://arxiv.org/abs/2610.37224)), integrating Spine into Pi improves **SWE-Milestone Score by 9.5%–17.5%** across `Gemini 3.8 Flash` and open-weight `Qwen 3.8 27B`, while cutting average input tokens by **67.8%** and commercial API cost by **45.4%**.
 
 ## Highlights
 
-- **Explicit boundaries and state.** Every subtask has a goal, a start, and an end. The agent always sees the goals above it, the step it is on, and what finished steps found.
-- **Managed automatically.** Closing a step shrinks the context—no separate summarizing pass. The agent writes the memory on the spot, while it still knows what mattered.
-- **Your conversation stays, the cache keeps hitting.** Your messages and the agent's replies are kept, and everything before the current step stays byte-for-byte identical.
-- **Subtrees in parallel.** `spine_spawn` hands a subtree to a child agent; its result comes back into the parent's tree.
+- **Unified work-tree control.** Sequential local steps (`Open` / `Close` / `Next`) and parallel child agents (`Spawn`) are managed together in one `SpineTree`, avoiding unnecessary cross-session subagent overhead on serial work.
+- **No separate summarization pass.** Closing a subtask folds its intermediate turns immediately using the conclusion written by the agent while full task context is still fresh; detailed history stays archived in the tree.
+- **Prefix cache keeps hitting.** Completed inner subtasks collapse at the active suffix, leaving preceding parent context byte-for-byte unchanged.
+- **Portable Spine SDK.** Shared Rust/WASM runtime core (`@spinejit/spine-sdk`) powering Pi, DeepSeek Harness, and [SpineCodex](https://github.com/GhabiX/SpineCodex).
 
-## Install
+## Install & Use
 
-**Pi**
+### 1. Spine for Pi (`@spinejit/pi-spinejit`)
 
 ```bash
 pi install npm:@spinejit/pi-spinejit
+
+# Recommended companion: compact terminal process tree (supports regular & fullscreen modes)
+pi install npm:@spinejit/pi-compact-tree
 ```
 
-Start Pi 1.1.0 and the agent works in steps on its own. The tree above the input shows the current step; `/spine-tree` browses the tree and opens any step's memory. Details: [packages/plugin](packages/plugin/README.md).
+Start Pi and the agent organizes multi-step work on `SpineTree` automatically. The live tree widget above the input shows active progress (`◉` active, `✓` completed); run `/spine-tree` at any time to browse the full tree and inspect any node's memory without disturbing the session. Package details: [packages/plugin](packages/plugin/README.md).
 
-If upgrading from `@spinejit/spine-plugin`, run `pi remove npm:@spinejit/spine-plugin` first.
+> Upgrading from the legacy `@spinejit/spine-plugin` name? Run `pi remove npm:@spinejit/spine-plugin` first.
 
-**DeepSeek Harness (DSH)**
+<details>
+<summary>View Spine for Pi live demo (task tree &amp; /spine-tree memory browser)</summary>
+
+<br />
+
+![Spine for Pi live demo](doc/images/pi-spine.gif)
+
+</details>
+
+### 2. Spine for DeepSeek Harness (`@spinejit/dsh-spinejit`)
+
+Add the plugin to your DSH Web or Desktop profile—the bundle automatically configures Spine as the context manager (disabling built-in flat compaction and tool-result pruning):
 
 ```bash
+# For DSH Web
 dsh plugin --profile web add @spinejit/dsh-spinejit
 dsh web
+
+# For DSH Desktop (macOS bundled CLI; restart DeepSeek Harness.app and open a new chat)
+"/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh" plugin --profile desktop add @spinejit/dsh-spinejit
 ```
 
-Replace `web` with your profile name. The plugin disables DSH's compaction, tool-result pruning, and image offload because Spine manages the context. The tree appears in the input dock of the web and desktop clients, and above the prompt in a dsh-tui terminal. Details: [packages/dsh](packages/dsh/README.md).
+The live `SpineTree` renders in the input dock of the Web / Desktop clients and above the prompt in `dsh-tui`. Package details: [packages/dsh](packages/dsh/README.md).
 
-## Also
+<details>
+<summary>View Spine for DeepSeek Harness live demo</summary>
 
-- **Codex user?** [SpineCodex](https://github.com/GhabiX/SpineCodex) is Codex with Spine built in.
-- More Pi plugins from us: [pi-background-job](https://github.com/GhabiX/pi-background-job) (background jobs that wake the agent), [pi-btw-cached](https://github.com/GhabiX/pi-btw-cached) (`/btw` side questions on the same cache), [pi-compact-tree](https://github.com/GhabiX/pi-compact-tree) (a compact terminal tree), [pi-timeout-policy](https://github.com/GhabiX/pi-timeout-policy) (one timeout policy for every tool).
+<br />
 
-Building from source and design notes: [doc/DESIGN.md](doc/DESIGN.md). Apache-2.0.
+![Spine for DeepSeek Harness live demo](doc/images/dsh-spine.gif)
 
-<details><summary>Citation</summary>
+</details>
+
+## Spine Ecosystem & Companion Pi Extensions
+
+- **[SpineCodex](https://github.com/GhabiX/SpineCodex)** — Standalone OpenAI Codex distribution with Spine built in (`npm install -g @spinejit/spine-codex@latest`).
+- **Companion Pi extensions**:
+  - [`@spinejit/pi-compact-tree`](https://github.com/GhabiX/pi-compact-tree) — Compact process tree for Pi's terminal UI (`regular` & `fullscreen` modes).
+  - [`@spinejit/pi-background-job`](https://github.com/GhabiX/pi-background-job) — Background jobs and log monitors that wake the agent on exit or matching output.
+  - [`@spinejit/pi-btw-cached`](https://github.com/GhabiX/pi-btw-cached) — `/btw` side questions sharing the main session's prompt-cache prefix without polluting history.
+  - [`@spinejit/pi-timeout-policy`](https://github.com/GhabiX/pi-timeout-policy) — Unified foreground timeout policy across `bash`, `grep`, and `find`.
+
+Source layout and architecture notes: [doc/DESIGN.md](doc/DESIGN.md). Licensed under [Apache-2.0](LICENSE).
+
+## Citation
 
 ```bibtex
 @misc{xiang2026spine,
@@ -55,8 +84,8 @@ Building from source and design notes: [doc/DESIGN.md](doc/DESIGN.md). Apache-2.
   author        = {Jiahong Xiang and Kunqiu Chen and Lingming Zhang and Yuqun Zhang},
   year          = {2026},
   eprint        = {2610.37224},
-  archivePrefix = {arXiv}
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.SE},
+  url           = {https://arxiv.org/abs/2610.37224}
 }
 ```
-
-</details>
