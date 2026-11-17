@@ -102,15 +102,41 @@ The tree Pi pins above its editor, drawn by the same code
   the header, always including the cursor's row (`◉`). They show the
   top-level session (not a Spawn child) opened or changed most recently.
 - In the web and desktop client, the whole tree in the conversation input
-  dock (`dist/client.js`, built by `scripts/build-client.mjs`). The host
-  appends a `plugin:spinejit/tree` record (`{cursor, nodes}`) to a session's
-  log whenever what its tree shows changes, and the session projection
+  dock (`dist/client.js`, bundled by Vite from `client/client.ts` and
+  `client/spine-dock.tsx`). It starts as one summary row for the cursor and
+  expands into a single surface with foldable branches, internal scrolling and
+  a locate control; node details and writes stay out of it. The dock uses the
+  shell's `@deepseek-ai/dsh-client-ui-primitives` atoms. Its stylesheet
+  (`client/spine-dock.css`) is compiled into the bundle and rendered with the
+  dock, since the web client loads only the module. The host appends a
+  `plugin:spinejit/tree` record (`{cursor, nodes}`) to a session's log
+  whenever what its tree shows changes, and the session projection
   `spinejit` serves the latest one to clients.
 
 Sessions logged by dsh-spinejit 0.1.1 and earlier carry `[U<n>]` in the user
 text. For them the web and desktop client hide that line in the bubble:
 `dist/client.js` registers a user-text rule (`uiConversation.userText`). The
 terminal (dsh-tui) has no such seam and still shows it in those old sessions.
+
+## Development
+
+The host lives in `src/` and the browser half in `client/`, which holds the
+dock's entry, TSX, stylesheet and browser-only declarations. Both typecheck
+separately (`tsconfig.json` and `tsconfig.client.json`); the client imports
+the shared tree contract from `src/tree.ts`.
+
+`npm run build -w @spinejit/dsh-spinejit` compiles the host with `tsc`, emits
+the client's types beside it (`dist/client/`) and then bundles the browser half
+with Vite (`vite.config.ts`): one CommonJS module in the web client's
+module-loader wrapper, with React, its JSX runtime and the shell's atoms left
+external, and the dock's stylesheet inlined. The client's declaration graph
+mirrors `client/` and `src/tree.ts`, so `dist/src/tree.d.ts` ships with it and
+the published `./client` types resolve inside `dist`. Those types name React's
+own, so `@types/react` is a dependency rather than a dev-only type: the client
+tests compile the entry's types from a throwaway install that holds only the
+package's declared dependencies.
+`npm run watch -w @spinejit/dsh-spinejit` rebuilds that bundle when a source
+file changes; a running Harness page still needs a reload to pick it up.
 
 ## Not yet
 

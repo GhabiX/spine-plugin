@@ -1,7 +1,7 @@
 // The Spine tree DSH shows: the terminal's three rows, the session records
 // clients fold, and the browser dock that draws them.
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import test from "node:test";
 
 import { pluginRecordOf } from "@deepseek-ai/dsh-session";
@@ -150,44 +150,281 @@ test("a user bubble hides the [U<n>] line its text starts with, and only that", 
   assert.equal(rule.match("plain", 0), undefined);
 });
 
-/** dist/client.js as the web client's module loader runs it, with a JSX runtime that builds plain objects. */
+const PRIMITIVES = {
+  Button: "button",
+  Tooltip: "span",
+  StateDot: "span",
+  IconBranchOutlineRegular: "svg",
+  IconChevronDownOutlineRegular: "svg",
+  IconChevronRightOutlineRegular: "svg",
+  IconChevronUpOutlineRegular: "svg",
+  IconCheckCircleOutlineRegular: "svg",
+  IconCloseCircleFillRegular: "svg",
+  IconCompactOutlineRegular: "svg",
+  IconInspectOutlineRegular: "svg",
+  IconStopFillRegular: "svg",
+  IconWarningTriangleOutlineRegular: "svg",
+};
+
+function createReactRuntime() {
+  let hooks = [];
+  let cursor = 0;
+  let component = null;
+  let props = null;
+  let output = null;
+  let rendering = false;
+
+  const element = (type, elementProps, key) => ({
+    type,
+    props: elementProps ?? {},
+    key: key ?? null,
+  });
+  const sameDeps = (previous, next) =>
+    previous !== undefined
+    && next !== undefined
+    && previous.length === next.length
+    && previous.every((value, index) => Object.is(value, next[index]));
+
+  const React = {
+    useState(initial) {
+      const slot = cursor++;
+      if (hooks[slot] === undefined) {
+        hooks[slot] = { value: typeof initial === "function" ? initial() : initial };
+      }
+      return [hooks[slot].value, (next) => {
+        hooks[slot].value = typeof next === "function" ? next(hooks[slot].value) : next;
+        render();
+      }];
+    },
+    useRef(initial) {
+      const slot = cursor++;
+      if (hooks[slot] === undefined) hooks[slot] = { value: { current: initial } };
+      return hooks[slot].value;
+    },
+    useEffect(effect, deps) {
+      const slot = cursor++;
+      const previous = hooks[slot];
+      if (previous !== undefined && sameDeps(previous.deps, deps)) return;
+      if (typeof previous?.cleanup === "function") previous.cleanup();
+      hooks[slot] = { deps, cleanup: effect() };
+    },
+    useCallback(callback) {
+      cursor += 1;
+      return callback;
+    },
+    useMemo(factory) {
+      cursor += 1;
+      return factory();
+    },
+  };
+
+  function render() {
+    if (rendering) throw new Error("nested render");
+    rendering = true;
+    cursor = 0;
+    output = component(props);
+    rendering = false;
+  }
+
+  return {
+    React,
+    mount(nextComponent, nextProps) {
+      component = nextComponent;
+      props = nextProps;
+      hooks = [];
+      output = null;
+      render();
+      return {
+        tree: () => output,
+        setProps(next) {
+          props = next;
+          render();
+        },
+      };
+    },
+  };
+}
+
+/** dist/client.js as the web client's module loader runs it, with host React and atom stubs. */
 async function loadClient() {
   const source = await readFile(new URL("../dist/client.js", import.meta.url), "utf8");
   let loaded;
   const window = { __ModuleLoader__: { load: (module) => { loaded = module; } } };
   new Function("window", source)(window);
-  const element = (key) => (type, props, elementKey) => ({ type, props, key: elementKey ?? null, kind: key });
+  const runtime = createReactRuntime();
   const required = [];
+  const elem = (type, props, key) => ({ type, props: props ?? {}, key: key ?? null });
   const client = loaded.factory((name) => {
     required.push(name);
-    return { jsx: element("jsx"), jsxs: element("jsxs") };
+    if (name === "react") return runtime.React;
+    if (name === "react/jsx-runtime") return { jsx: elem, jsxs: elem };
+    if (name === "@deepseek-ai/dsh-client-ui-primitives") return PRIMITIVES;
+    throw new Error(`unexpected module request: ${name}`);
   });
-  return { id: loaded.id, client, required };
+  return { id: loaded.id, client, required, runtime };
 }
 
-test("the client bundle loads in the module loader and draws the whole tree in the dock", async () => {
-  const { id, client, required } = await loadClient();
-  assert.equal(id, "@spinejit/dsh-spinejit");
-  assert.deepEqual(required, ["react/jsx-runtime"]);
-  assert.deepEqual(client.inject, ["slots", "uiConversation"]);
-  const registered = [];
+function registerDock(client) {
+  const entries = [];
   const rules = [];
   client.apply({
-    slots: { inject: (_name, register) => register(), register: (entry, component) => registered.push([entry, component]) },
+    slots: { inject: (_name, register) => register(), register: (entry, component) => entries.push([entry, component]) },
     uiConversation: { userText: { register: (rule) => { rules.push(rule); return () => {}; } } },
     effect: (execute) => execute(),
   });
-  assert.deepEqual(rules, [client.userAnchorRule], "the user-anchor rule is registered");
-  assert.deepEqual(registered.map(([entry]) => entry), [{ name: "conversation.input.dock", id: "spinejit", order: 30, registrant: "@spinejit/dsh-spinejit" }]);
-  const Dock = registered[0][1];
-  assert.equal(Dock({ useProjection: () => undefined }), null);
-  assert.equal(Dock({ useProjection: () => ({ cursor: "1", nodes: [node("1", null, null, "Live", "RootEpoch")] }) }), null);
-  const keys = [];
-  const dock = Dock({ useProjection: (key) => { keys.push(key); return deep; } });
-  assert.deepEqual(keys, ["spinejit"]);
-  const flat = (part) => typeof part === "string" ? part : Array.isArray(part.props.children) ? part.props.children.map(flat).join("") : flat(part.props.children);
-  assert.deepEqual(dock.props.children.map(flat), formatPrettySpineTreeFromNodes(deep.cursor, deep.nodes));
-  const current = dock.props.children[4].props.children[1];
-  assert.equal(current.props.children, "◉");
-  assert.equal(current.props.style.color, "var(--dsw-alias-state-success-primary)");
+  assert.equal(entries.length, 1, "the client registers exactly one dock entry");
+  return { entry: entries[0][0], Dock: entries[0][1], rules };
+}
+
+function textOf(node) {
+  if (node === null || node === undefined || typeof node === "boolean") return "";
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map(textOf).join("");
+  return textOf(node.props?.children);
+}
+
+function nodesWhere(node, predicate, out = []) {
+  if (node === null || node === undefined || typeof node !== "object") return out;
+  if (Array.isArray(node)) {
+    for (const child of node) nodesWhere(child, predicate, out);
+    return out;
+  }
+  if (predicate(node)) out.push(node);
+  nodesWhere(node.props?.children, predicate, out);
+  return out;
+}
+
+function headerOf(tree) {
+  const header = nodesWhere(tree, (node) => node.props.className === "sj-header")[0];
+  assert.ok(header, "the dock header is rendered");
+  return header;
+}
+
+function rowsOf(tree) {
+  return nodesWhere(tree, (node) => node.props.className === "sj-row");
+}
+
+const click = (node) => node.props.onClick();
+
+test("the client bundle carries the dock's stylesheet, since the web client loads only the module", async () => {
+  const loaded = await loadClient();
+  const { Dock } = registerDock(loaded.client);
+  const tree = loaded.runtime.mount(Dock, { useProjection: () => deep }).tree();
+  const style = nodesWhere(tree, (node) => node.type === "style")[0];
+  assert.ok(style, "the dock renders its stylesheet");
+  assert.match(style.props.children, /\.sj-dock\{/);
+  assert.match(style.props.children, /\.sj-row\[data-current="true"\]\{/);
+  assert.deepEqual(
+    (await readdir(new URL("../dist", import.meta.url))).filter((name) => name.endsWith(".css")),
+    [],
+    "no stylesheet file is emitted for a page that would not load it",
+  );
 });
+
+test("the client's types and the shared contract they import are shipped inside dist", async () => {
+  const pkg = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+  assert.equal(pkg.exports["./client"].types, "./dist/client/client.d.ts");
+});
+
+test("the client bundle loads in the module loader and registers the dock beside the anchor rule", async () => {
+  const { id, client, required, runtime } = await loadClient();
+  assert.equal(id, "@spinejit/dsh-spinejit");
+  assert.deepEqual(
+    [...new Set(required)].sort(),
+    ["@deepseek-ai/dsh-client-ui-primitives", "react", "react/jsx-runtime"],
+  );
+  assert.deepEqual(client.inject, ["slots", "uiConversation"]);
+  const { entry, Dock, rules } = registerDock(client);
+  assert.deepEqual(rules, [client.userAnchorRule], "the user-anchor rule is registered");
+  assert.deepEqual(entry, { name: "conversation.input.dock", id: "spinejit", order: 30, registrant: "@spinejit/dsh-spinejit" });
+
+  assert.equal(runtime.mount(Dock, { useProjection: () => undefined }).tree(), null,
+    "no projection capability means no dock");
+  const waiting = runtime.mount(Dock, { useProjection: () => null });
+  assert.equal(textOf(waiting.tree()).includes("Waiting for the first Spine task"), true,
+    "a registered projection without a tree shows the waiting bar");
+  click(headerOf(waiting.tree()));
+  assert.equal(textOf(waiting.tree()).includes("appears after Spine opens its first task"), true,
+    "the waiting bar explains when the tree arrives");
+});
+
+test("the dock starts collapsed on the cursor and expands into the whole tree", async () => {
+  const loaded = await loadClient();
+  const { Dock } = registerDock(loaded.client);
+  const runtime = loaded.runtime;
+  const keys = [];
+  const dock = runtime.mount(Dock, {
+    useProjection: (key) => {
+      keys.push(key);
+      return deep;
+    },
+  });
+  assert.deepEqual(keys, ["spinejit"]);
+  let tree = dock.tree();
+  assert.equal(headerOf(tree).props["aria-expanded"], "false");
+  assert.equal(textOf(headerOf(tree)).includes("deep step"), true, "the collapsed summary is the cursor's");
+  assert.equal(rowsOf(tree).length, 0, "no tree rows while collapsed");
+
+  click(headerOf(tree));
+  tree = dock.tree();
+  assert.equal(headerOf(tree).props["aria-expanded"], "true");
+  assert.equal(rowsOf(tree).length, 4, "every node is drawn");
+  assert.equal(textOf(tree).includes("first step"), true);
+  assert.equal(textOf(tree).includes("detail"), false, "the dock offers no node detail");
+  assert.deepEqual(
+    nodesWhere(tree, (node) => node.props["aria-label"] !== undefined && node.props.role === "img")
+      .map((node) => node.props["aria-label"]),
+    ["Opened", "Closed", "Opened", "Live"],
+    "status markers keep accessible names",
+  );
+  const current = rowsOf(tree).find((row) => row.props["data-current"] === "true");
+  assert.ok(current, "the cursor row is marked");
+  assert.equal(current.props["aria-current"], "step");
+  assert.equal(current.props.onClick, undefined, "browsing a row does not execute anything");
+});
+
+test("branches fold, survive projection updates, and the locate button reveals the cursor", async () => {
+  const loaded = await loadClient();
+  const { Dock } = registerDock(loaded.client);
+  const runtime = loaded.runtime;
+  const dock = runtime.mount(Dock, { useProjection: () => deep });
+  click(headerOf(dock.tree()));
+  let tree = dock.tree();
+  const caret = nodesWhere(tree, (node) => node.props.className === "sj-caret")
+    .find((node) => node.props["aria-label"].includes("second step"));
+  assert.ok(caret, "the second step branch has a caret");
+  click(caret);
+  assert.equal(rowsOf(dock.tree()).length, 3, "the folded branch hides its child");
+
+  dock.setProps({ useProjection: () => ({ ...deep }) });
+  assert.equal(rowsOf(dock.tree()).length, 3, "a new projection value keeps the user's folding");
+  assert.equal(headerOf(dock.tree()).props["aria-expanded"], "true", "a new projection value keeps the dock open");
+
+  const locate = nodesWhere(dock.tree(), (node) => node.props.className === "sj-locateWrap")[0];
+  assert.ok(locate, "the locate control is shown while expanded");
+  click(nodesWhere(locate, (node) => node.type === "button")[0]);
+  assert.equal(rowsOf(dock.tree()).length, 4, "locating expands the cursor's ancestors");
+});
+
+test("the whole tree keeps root epochs and shows spawn outcomes", async () => {
+  const loaded = await loadClient();
+  const { Dock } = registerDock(loaded.client);
+  const runtime = loaded.runtime;
+  const tree = {
+    cursor: "1.2",
+    nodes: [
+      node("1", null, null, "Compacted", "RootEpoch"),
+      { ...node("1.1", "1", "inherited work", "Opened"), spawn: "inherited" },
+      { ...node("1.2", "1", "arrived work", "Closed", "Spawn"), spawn: { arrived: "completed" } },
+    ],
+  };
+  const dock = runtime.mount(Dock, { useProjection: () => tree });
+  click(headerOf(dock.tree()));
+  const rows = rowsOf(dock.tree());
+  assert.deepEqual(rows.map(textOf), ["Epoch 1", "inherited work", "arrived work"]);
+  assert.deepEqual(
+    rows.map((row) => nodesWhere(row, (part) => part.props.role === "img")[0].props["aria-label"]),
+    ["Root epoch", "Inherited spawn", "Spawn completed"],
+  );
+});
+

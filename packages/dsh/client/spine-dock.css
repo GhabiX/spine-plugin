@@ -1,0 +1,27 @@
+/* The Spine dock, in the web client's theme tokens. It sits in the composer
+   dock row, sized like the official rows. */
+.sj-dock{box-sizing:border-box;width:calc(100% - var(--dsh-composer-side-clearance) - var(--dsh-composer-side-clearance) - var(--dsh-composer-dock-inset) - var(--dsh-composer-dock-inset) - var(--dsh-composer-dock-inset) - var(--dsh-composer-dock-inset));max-width:calc(var(--dsh-composer-card-max-width) - var(--dsh-composer-dock-inset) - var(--dsh-composer-dock-inset) - var(--dsh-composer-dock-inset) - var(--dsh-composer-dock-inset));--dsw-elevation-stroke-color:var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-lg);background:var(--dsw-specific-menu);backdrop-filter:var(--dsw-menu-backdrop-filter);box-shadow:var(--dsw-elevation-panel);border:0;flex:none;margin:0 auto;overflow:hidden;color:var(--dsw-alias-label-secondary);font-size:13px;line-height:1.45}
+.sj-heading{position:relative;display:flex;align-items:center;min-width:0}
+.sj-header{display:flex;align-items:center;gap:10px;width:100%;min-height:36px;padding:6px 32px 6px 12px;border:0;background:transparent;font:inherit;color:inherit;text-align:left;cursor:pointer;border-radius:inherit}
+.sj-dock[data-open="true"] .sj-header{padding-right:64px}
+.sj-header:hover{background:var(--dsw-alias-bg-layer-1)}
+.sj-header:focus-visible,.sj-caret:focus-visible,.sj-scroll:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:-2px}
+.sj-lead{flex:none;display:grid;place-items:center;color:var(--dsw-alias-label-tertiary)}
+.sj-summary{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sj-chevron{position:absolute;right:10px;top:50%;transform:translateY(-50%);display:grid;place-items:center;color:var(--dsw-alias-label-tertiary);pointer-events:none}
+.sj-locateWrap{position:absolute;right:28px;top:50%;transform:translateY(-50%);display:grid;place-items:center}
+.sj-locate{width:24px;height:24px;min-width:24px;padding:0;display:grid;place-items:center;color:var(--dsw-alias-label-tertiary)}
+.sj-body{display:flex;flex-direction:column;min-height:0;padding:0 12px 6px}
+.sj-notice{padding:2px 2px 6px;font-size:12px;line-height:1.5;color:var(--dsw-alias-label-tertiary)}
+.sj-scroll{min-height:0;max-height:min(190px,30vh);overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;padding:2px 0 4px;scrollbar-width:thin;border-radius:6px}
+.sj-row{display:flex;align-items:center;gap:7px;min-height:26px;padding:2px 4px;border-radius:5px;color:var(--dsw-alias-label-secondary)}
+.sj-row:hover{background:var(--dsw-alias-bg-layer-1)}
+.sj-row[data-current="true"]{color:var(--dsw-alias-brand-primary);background:var(--dsw-alias-bg-layer-2)}
+.sj-caret{flex:none;width:16px;height:20px;padding:0;display:grid;place-items:center;border:0;background:transparent;color:var(--dsw-alias-label-tertiary);cursor:pointer;border-radius:4px}
+.sj-caret:hover{color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-bg-layer-2)}
+.sj-caretSpacer{flex:none;width:16px}
+.sj-mark{flex:none;width:14px;display:grid;place-items:center;color:var(--dsw-alias-label-tertiary)}
+.sj-mark.success{color:var(--dsw-alias-state-success-primary)}
+.sj-mark.error{color:var(--dsw-alias-state-error-primary)}
+.sj-mark.warn{color:var(--dsw-alias-state-warn-primary)}
+.sj-label{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

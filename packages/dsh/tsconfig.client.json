@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "dist",
+    "skipLibCheck": true,
+    "jsx": "react-jsx"
+  },
+  "include": [
+    "client/**/*.ts",
+    "client/**/*.tsx",
+    "src/tree.ts"
+  ]
+}

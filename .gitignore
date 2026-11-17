@@ -1,5 +1,5 @@
 /target/
-/node_modules/
+node_modules/
 /packages/*/dist/
 *.tsbuildinfo
 
@@ -12,3 +12,6 @@
 /archive/pi_spinejit_rename_20261008_1722/evidence/
 /archive/pi_spinejit_rename_20261008_1722/validation/
 /archive/spinetree_plugin_20261027/spinetree-plugin/dist/
+
+# agent handoff artifacts stay local
+.dsh/
