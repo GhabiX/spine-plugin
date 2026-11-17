@@ -10,8 +10,8 @@
 - id: tool-result-pruner
   disabled: true
 
-- id: image-offload
-  disabled: true
+# image-offload is left alone: its row only exists at the composition root, so a
+# bundle patch (which applies inside a preset) cannot reach it and is rejected.
 
 - insert:
     - id: spinejit
