@@ -13,7 +13,6 @@ import {
   IconCloseCircleFillRegular,
   IconCompactOutlineRegular,
   IconInspectOutlineRegular,
-  IconStopFillRegular,
   IconWarningTriangleOutlineRegular,
   StateDot,
   Tooltip,
@@ -72,9 +71,15 @@ export function SpineDock({ useProjection, sessionId, setBlock, newSession }: Sp
   const cursorRow = useRef<HTMLDivElement | null>(null);
 
   const shown = tree !== null && showsTree(tree) ? tree : null;
-  const index = useMemo(() => indexTree(shown === null ? [] : shown.nodes), [shown]);
+  // A root epoch only holds the tasks under it. The pinned tree never draws one,
+  // and a row that says "Epoch 1" tells the reader nothing, so neither does this.
+  const nodes = useMemo(
+    () => shown === null ? [] : shown.nodes.filter((node) => node.kind !== "RootEpoch"),
+    [shown],
+  );
+  const index = useMemo(() => indexTree(nodes), [nodes]);
   const rows = useMemo(() => visibleRows(index, collapsed), [index, collapsed]);
-  const cursorNode = shown === null ? null : shown.nodes.find((node) => node.nodeId === shown.cursor) ?? null;
+  const cursorNode = shown === null ? null : nodes.find((node) => node.nodeId === shown.cursor) ?? null;
 
   const revealCursorPath = useCallback(() => {
     if (cursorNode === null) return;
@@ -103,8 +108,13 @@ export function SpineDock({ useProjection, sessionId, setBlock, newSession }: Sp
 
   const scrollToCursor = () => {
     const box = scroller.current;
+    if (box === null) return;
     const row = cursorRow.current;
-    if (box === null || row === null) return;
+    // Nothing is open: the newest rows are the ones worth showing.
+    if (row === null) {
+      box.scrollTop = box.scrollHeight;
+      return;
+    }
     const boxRect = box.getBoundingClientRect();
     const rowRect = row.getBoundingClientRect();
     box.scrollTop += rowRect.top - boxRect.top - (box.clientHeight - rowRect.height) / 2;
@@ -131,7 +141,7 @@ export function SpineDock({ useProjection, sessionId, setBlock, newSession }: Sp
     ? "Started before Spine"
     : shown === null
     ? "Waiting for the first Spine task"
-    : cursorNode === null ? "Spine Tree" : labelOf(cursorNode, true);
+    : cursorNode === null ? "No node open" : spineTreeLabel(cursorNode, true);
 
   return (
     <section className="sj-dock" data-open={open ? "true" : "false"} aria-label="Spine Tree">
@@ -225,7 +235,7 @@ function rowElement(
 ): ReactElement {
   const { node, depth } = row;
   const current = node.nodeId === cursor;
-  const label = labelOf(node, current);
+  const label = spineTreeLabel(node, current);
   const marker = markerOf(node);
   const expandable = row.hasChildren;
   const expanded = !collapsed.has(node.nodeId);
@@ -292,12 +302,9 @@ function markerOf(node: DisplayNode): Marker {
   if (node.status === "Compacted") {
     return { icon: <IconCompactOutlineRegular size={12} />, tone: "warn", label: "Compacted" };
   }
-  return { icon: <IconStopFillRegular size={10} />, tone: "dim", label: "Closed" };
-}
-
-function labelOf(node: DisplayNode, current: boolean): string {
-  if (node.kind === "RootEpoch") return node.summary?.trim() || `Epoch ${node.nodeId}`;
-  return spineTreeLabel(node, current);
+  // Closed and an arrived Spawn are both work that finished: one mark for both,
+  // as the pinned tree draws them.
+  return { icon: <IconCheckCircleOutlineRegular size={12} />, tone: "success", label: "Closed" };
 }
 
 function indexTree(nodes: readonly DisplayNode[]): IndexedTree {

@@ -463,7 +463,7 @@ test("branches fold, survive projection updates, and the locate button reveals t
   assert.equal(rowsOf(dock.tree()).length, 4, "locating expands the cursor's ancestors");
 });
 
-test("the whole tree keeps root epochs and shows spawn outcomes", async () => {
+test("the tree draws the tasks under an epoch and the outcome of each Spawn", async () => {
   const loaded = await loadClient();
   const { Dock } = registerDock(loaded.client);
   const runtime = loaded.runtime;
@@ -478,10 +478,53 @@ test("the whole tree keeps root epochs and shows spawn outcomes", async () => {
   const dock = runtime.mount(Dock, { useProjection: () => viewOf(tree) });
   click(headerOf(dock.tree()));
   const rows = rowsOf(dock.tree());
-  assert.deepEqual(rows.map(textOf), ["Epoch 1", "inherited work", "arrived work"]);
+  assert.deepEqual(rows.map(textOf), ["inherited work", "arrived work"], "even a compacted epoch is no row");
   assert.deepEqual(
     rows.map((row) => nodesWhere(row, (part) => part.props.role === "img")[0].props["aria-label"]),
-    ["Root epoch", "Inherited spawn", "Spawn completed"],
+    ["Inherited spawn", "Spawn completed"],
   );
 });
 
+
+test("a root epoch is the container of its tasks, not a row, and an idle cursor says nothing is open", async () => {
+  const loaded = await loadClient();
+  const { Dock } = registerDock(loaded.client);
+  const runtime = loaded.runtime;
+  const tree = {
+    cursor: "1",
+    nodes: [
+      node("1", null, null, "Live", "RootEpoch"),
+      node("1.1", "1", "first task", "Closed"),
+      node("1.2", "1", "second task", "Closed"),
+    ],
+  };
+  const dock = runtime.mount(Dock, { useProjection: () => viewOf(tree), sessionId: "s1" });
+  assert.equal(textOf(headerOf(dock.tree())).includes("No node open"), true,
+    "a cursor at the root epoch says nothing is open rather than naming the epoch");
+  click(headerOf(dock.tree()));
+  const rows = rowsOf(dock.tree());
+  assert.deepEqual(rows.map(textOf), ["first task", "second task"], "the epoch itself earns no row");
+  assert.deepEqual(rows.map((row) => row.props.style.paddingLeft), ["4px", "4px"], "its tasks are the top level");
+  assert.equal(nodesWhere(dock.tree(), (row) => row.props.className === "sj-locateWrap").length, 0,
+    "there is no cursor row to locate");
+});
+
+test("work that finished looks the same closed or arrived from a Spawn", async () => {
+  const loaded = await loadClient();
+  const { Dock } = registerDock(loaded.client);
+  const runtime = loaded.runtime;
+  const tree = {
+    cursor: "1.1",
+    nodes: [
+      node("1.1", null, "closed task", "Closed"),
+      { ...node("1.2", null, "spawned task", "Closed", "Spawn"), spawn: { arrived: "completed" } },
+    ],
+  };
+  const dock = runtime.mount(Dock, { useProjection: () => viewOf(tree), sessionId: "s1" });
+  click(headerOf(dock.tree()));
+  assert.deepEqual(
+    rowsOf(dock.tree()).map((row) => nodesWhere(row, (part) => part.props.role === "img")[0].props.className),
+    ["sj-mark success", "sj-mark success"],
+    "both are done, so both carry the success mark",
+  );
+});
