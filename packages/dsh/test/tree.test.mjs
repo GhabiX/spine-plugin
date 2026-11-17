@@ -369,12 +369,10 @@ test("the client bundle loads in the module loader and registers the dock beside
 
   assert.equal(runtime.mount(Dock, { useProjection: () => undefined }).tree(), null,
     "no projection capability means no dock");
-  const waiting = runtime.mount(Dock, { useProjection: () => viewOf(null) });
-  assert.equal(textOf(waiting.tree()).includes("Waiting for the first Spine task"), true,
-    "a registered projection without a tree shows the waiting bar");
-  click(headerOf(waiting.tree()));
-  assert.equal(textOf(waiting.tree()).includes("appears after Spine opens its first task"), true,
-    "the waiting bar explains when the tree arrives");
+  assert.equal(runtime.mount(Dock, { useProjection: () => viewOf(null) }).tree(), null,
+    "a session that has not opened a task yet shows no dock");
+  assert.equal(runtime.mount(Dock, { useProjection: () => viewOf({ cursor: "1", nodes: [] }) }).tree(), null,
+    "a record without a task shows no dock either");
 });
 
 test("a session whose log began before Spine is left inert, with the reason and a way to start over", async () => {
@@ -389,14 +387,11 @@ test("a session whose log began before Spine is left inert, with the reason and 
   }]], "the composer is blocked with the reason it shows as its placeholder");
   assert.equal(textOf(headerOf(dock.tree())).includes("Started before Spine"), true,
     "the bar says the session predates Spine instead of waiting for a task");
-  assert.equal(textOf(dock.tree()).includes("Waiting for the first Spine task"), false);
 
   click(headerOf(dock.tree()));
   const tree = dock.tree();
   assert.equal(textOf(tree).includes("This session's history is outside the Spine tree."), true,
     "the dock explains why the tree does not cover it");
-  assert.equal(textOf(tree).includes("appears after Spine opens its first task"), false,
-    "a legacy session is not told to wait for a task");
   click(nodesWhere(tree, (node) => node.type === "button" && textOf(node) === "New session")[0]);
   assert.equal(sessions.length, 1, "the notice opens a new session");
 

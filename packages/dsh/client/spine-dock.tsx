@@ -59,7 +59,12 @@ const LEGACY_REASON = "This session began before Spine. Start a new session to c
 /** In the dock of that session: why the tree does not cover it. */
 const LEGACY_NOTICE = "This session's history is outside the Spine tree.";
 
-/** The dock entry: a collapsed summary of the cursor, expanding into the whole current tree. */
+/**
+ * The dock entry: a collapsed summary of the cursor, expanding into the whole
+ * current tree. It renders nothing until the session has opened a task, so a
+ * new conversation shows no Tree bar, and none for a history the tree cannot
+ * cover either.
+ */
 export function SpineDock({ useProjection, sessionId, setBlock, newSession }: SpineDockProps): ReactElement | null {
   const view = useProjection(TREE_PROJECTION);
   const tree = view?.tree ?? null;
@@ -136,11 +141,11 @@ export function SpineDock({ useProjection, sessionId, setBlock, newSession }: Sp
   }, [legacy, sessionId, setBlock]);
 
   if (view === undefined) return null;
+  // Nothing to show: a session that has not opened a task yet gets no dock at all.
+  if (shown === null && !legacy) return null;
 
-  const summary = legacy && shown === null
+  const summary = shown === null
     ? "Started before Spine"
-    : shown === null
-    ? "Waiting for the first Spine task"
     : cursorNode === null ? "No node open" : spineTreeLabel(cursorNode, true);
 
   return (
@@ -207,7 +212,7 @@ export function SpineDock({ useProjection, sessionId, setBlock, newSession }: Sp
               )
               : null}
             {shown === null
-              ? (legacy ? null : <div className="sj-notice">The tree appears after Spine opens its first task.</div>)
+              ? null
               : (
                 <div
                   className="sj-scroll"
