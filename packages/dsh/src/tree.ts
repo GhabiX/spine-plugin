@@ -21,6 +21,22 @@ export interface SpineTree {
   nodes: DisplayNode[];
 }
 
+/**
+ * What clients read from a session's projection: the tree its log last
+ * recorded, and whether the log began before this plugin did. Both fold from
+ * the log alone, so a client knows a session predates Spine before any agent
+ * runs in it.
+ */
+export interface SpineView {
+  tree: SpineTree | null;
+  /**
+   * A response was logged with no Spine sampling in front of it: that history
+   * was never observed as sources, so the tree cannot account for it. Front
+   * ends say so and leave the session's input inert.
+   */
+  legacy: boolean;
+}
+
 export function spineTreeOf(projection: SpineProjection): SpineTree {
   return { cursor: formatNodeId(projection.cursor), nodes: displayNodesFromProjection(projection) };
 }

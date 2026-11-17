@@ -26,6 +26,9 @@ const deep = {
 };
 const text = (line) => line.type === "node" ? `${line.prefix}${line.marker} ${line.label}` : line.type;
 
+/** A session's projection value: the tree it recorded, and whether its log began before Spine. */
+const viewOf = (tree, legacy = false) => ({ tree, legacy });
+
 test("the terminal window keeps the cursor's row within three rows", () => {
   // Without the header the tree has four rows; the root task's is cut.
   assert.deepEqual(treeWindow(deep, 3).map(text), ["    ├ ✓ first step", "    └ ▾ second step", "      └ ◉ deep step"]);
@@ -95,16 +98,38 @@ test("the terminal rows show the session's tree, draw markers with theme colors,
 
 test("the projection folds the latest readable tree record and ignores the rest", () => {
   const state = treeProjection.init();
-  assert.equal(state, null);
+  assert.deepEqual(state, { tree: null, legacy: false, sampling: false });
   const other = { seq: 1, type: "turn/end", data: {} };
   assert.equal(treeProjection.apply(state, other), state);
   const record = (seq, data) => ({ seq, time: 0, type: TREE_RECORD, ignorable: true, data });
   assert.equal(pluginRecordOf(record(2, deep))?.type, TREE_RECORD);
   const folded = treeProjection.apply(state, record(2, deep));
-  assert.deepEqual(folded, deep);
+  assert.deepEqual(folded.tree, deep);
   assert.equal(treeProjection.apply(folded, other), folded, "an unrelated event keeps the same state");
   assert.equal(treeProjection.apply(folded, record(3, { cursor: 1 })), folded, "an unreadable record keeps the tree");
-  assert.deepEqual(treeProjection.wire.viewSchema.parse(folded), deep);
+  assert.deepEqual(treeProjection.wire.viewSchema.parse(treeProjection.wire.view(folded)), viewOf(deep));
+});
+
+test("a log that began before Spine folds to legacy without an agent running in it", async () => {
+  const fold = (events) => events.reduce((state, event) => treeProjection.apply(state, event), treeProjection.init());
+  const before = await mountDsh(["reply"], { plugin: false });
+  let legacyEvents;
+  try {
+    legacyEvents = (await before.run("hello")).session.snapshotEvents();
+  } finally {
+    await before.dispose();
+  }
+  assert.equal(fold(legacyEvents).legacy, true,
+    "a response with no Spine sampling in front of it is history this plugin never observed");
+
+  const fresh = await mountDsh([[["spine_open", { goal: "A" }]], "done"]);
+  let freshEvents;
+  try {
+    freshEvents = (await fresh.run("start")).session.snapshotEvents();
+  } finally {
+    await fresh.dispose();
+  }
+  assert.equal(fold(freshEvents).legacy, false, "a session Spine ran from its first turn is never legacy");
 });
 
 test("each change of the shown tree is recorded once, a resumed session records none again, and the projection serves it", async () => {
@@ -124,7 +149,7 @@ test("each change of the shown tree is recorded once, a resumed session records 
       ["  └ ◉ inspect"],
       ["  └ ✓ inspect"],
     ]);
-    assert.deepEqual(first.ctx.sessionProjections.stateOf(agent.session, "spinejit"), trees.at(-1));
+    assert.deepEqual(first.ctx.sessionProjections.stateOf(agent.session, "spinejit").tree, trees.at(-1));
   } finally {
     await first.dispose();
   }
@@ -267,13 +292,17 @@ async function loadClient() {
 function registerDock(client) {
   const entries = [];
   const rules = [];
+  const blocks = [];
+  const sessions = [];
   client.apply({
     slots: { inject: (_name, register) => register(), register: (entry, component) => entries.push([entry, component]) },
     uiConversation: { userText: { register: (rule) => { rules.push(rule); return () => {}; } } },
+    conversation: { blocks: { set: (sessionId, block) => { blocks.push([sessionId, block]); } } },
+    uiWorkspace: { startSession: () => { sessions.push(true); } },
     effect: (execute) => execute(),
   });
   assert.equal(entries.length, 1, "the client registers exactly one dock entry");
-  return { entry: entries[0][0], Dock: entries[0][1], rules };
+  return { entry: entries[0][0], Dock: entries[0][1], rules, blocks, sessions };
 }
 
 function textOf(node) {
@@ -309,7 +338,7 @@ const click = (node) => node.props.onClick();
 test("the client bundle carries the dock's stylesheet, since the web client loads only the module", async () => {
   const loaded = await loadClient();
   const { Dock } = registerDock(loaded.client);
-  const tree = loaded.runtime.mount(Dock, { useProjection: () => deep }).tree();
+  const tree = loaded.runtime.mount(Dock, { useProjection: () => viewOf(deep) }).tree();
   const style = nodesWhere(tree, (node) => node.type === "style")[0];
   assert.ok(style, "the dock renders its stylesheet");
   assert.match(style.props.children, /\.sj-dock\{/);
@@ -333,19 +362,47 @@ test("the client bundle loads in the module loader and registers the dock beside
     [...new Set(required)].sort(),
     ["@deepseek-ai/dsh-client-ui-primitives", "react", "react/jsx-runtime"],
   );
-  assert.deepEqual(client.inject, ["slots", "uiConversation"]);
+  assert.deepEqual(client.inject, ["slots", "uiConversation", "conversation", "uiWorkspace"]);
   const { entry, Dock, rules } = registerDock(client);
   assert.deepEqual(rules, [client.userAnchorRule], "the user-anchor rule is registered");
   assert.deepEqual(entry, { name: "conversation.input.dock", id: "spinejit", order: 30, registrant: "@spinejit/dsh-spinejit" });
 
   assert.equal(runtime.mount(Dock, { useProjection: () => undefined }).tree(), null,
     "no projection capability means no dock");
-  const waiting = runtime.mount(Dock, { useProjection: () => null });
+  const waiting = runtime.mount(Dock, { useProjection: () => viewOf(null) });
   assert.equal(textOf(waiting.tree()).includes("Waiting for the first Spine task"), true,
     "a registered projection without a tree shows the waiting bar");
   click(headerOf(waiting.tree()));
   assert.equal(textOf(waiting.tree()).includes("appears after Spine opens its first task"), true,
     "the waiting bar explains when the tree arrives");
+});
+
+test("a session whose log began before Spine is left inert, with the reason and a way to start over", async () => {
+  const loaded = await loadClient();
+  const { Dock, blocks, sessions } = registerDock(loaded.client);
+  const runtime = loaded.runtime;
+  const epoch = { cursor: "1", nodes: [node("1", null, null, "Live", "RootEpoch")] };
+  const dock = runtime.mount(Dock, { useProjection: () => viewOf(epoch, true), sessionId: "session-1" });
+
+  assert.deepEqual(blocks, [["session-1", {
+    reason: "This session began before Spine. Start a new session to continue.",
+  }]], "the composer is blocked with the reason it shows as its placeholder");
+  assert.equal(textOf(headerOf(dock.tree())).includes("Started before Spine"), true,
+    "the bar says the session predates Spine instead of waiting for a task");
+  assert.equal(textOf(dock.tree()).includes("Waiting for the first Spine task"), false);
+
+  click(headerOf(dock.tree()));
+  const tree = dock.tree();
+  assert.equal(textOf(tree).includes("This session's history is outside the Spine tree."), true,
+    "the dock explains why the tree does not cover it");
+  assert.equal(textOf(tree).includes("appears after Spine opens its first task"), false,
+    "a legacy session is not told to wait for a task");
+  click(nodesWhere(tree, (node) => node.type === "button" && textOf(node) === "New session")[0]);
+  assert.equal(sessions.length, 1, "the notice opens a new session");
+
+  // The block is page-local: a session the host no longer calls legacy clears it.
+  dock.setProps({ useProjection: () => viewOf(deep), sessionId: "session-1" });
+  assert.deepEqual(blocks.at(-1), ["session-1", undefined], "leaving the legacy session clears the block");
 });
 
 test("the dock starts collapsed on the cursor and expands into the whole tree", async () => {
@@ -356,7 +413,7 @@ test("the dock starts collapsed on the cursor and expands into the whole tree", 
   const dock = runtime.mount(Dock, {
     useProjection: (key) => {
       keys.push(key);
-      return deep;
+      return viewOf(deep);
     },
   });
   assert.deepEqual(keys, ["spinejit"]);
@@ -387,7 +444,7 @@ test("branches fold, survive projection updates, and the locate button reveals t
   const loaded = await loadClient();
   const { Dock } = registerDock(loaded.client);
   const runtime = loaded.runtime;
-  const dock = runtime.mount(Dock, { useProjection: () => deep });
+  const dock = runtime.mount(Dock, { useProjection: () => viewOf(deep) });
   click(headerOf(dock.tree()));
   let tree = dock.tree();
   const caret = nodesWhere(tree, (node) => node.props.className === "sj-caret")
@@ -396,7 +453,7 @@ test("branches fold, survive projection updates, and the locate button reveals t
   click(caret);
   assert.equal(rowsOf(dock.tree()).length, 3, "the folded branch hides its child");
 
-  dock.setProps({ useProjection: () => ({ ...deep }) });
+  dock.setProps({ useProjection: () => viewOf({ ...deep }) });
   assert.equal(rowsOf(dock.tree()).length, 3, "a new projection value keeps the user's folding");
   assert.equal(headerOf(dock.tree()).props["aria-expanded"], "true", "a new projection value keeps the dock open");
 
@@ -418,7 +475,7 @@ test("the whole tree keeps root epochs and shows spawn outcomes", async () => {
       { ...node("1.2", "1", "arrived work", "Closed", "Spawn"), spawn: { arrived: "completed" } },
     ],
   };
-  const dock = runtime.mount(Dock, { useProjection: () => tree });
+  const dock = runtime.mount(Dock, { useProjection: () => viewOf(tree) });
   click(headerOf(dock.tree()));
   const rows = rowsOf(dock.tree());
   assert.deepEqual(rows.map(textOf), ["Epoch 1", "inherited work", "arrived work"]);

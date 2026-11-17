@@ -21,11 +21,16 @@ import {
 import { spineTreeLabel, spineTreeSpawnOutcome, type DisplayNode } from "@spinejit/spine-sdk/view";
 
 import styles from "./spine-dock.css?inline";
-import { showsTree, TREE_PROJECTION, type SpineTree } from "../src/tree.js";
+import { showsTree, TREE_PROJECTION, type SpineView } from "../src/tree.js";
 
-/** The dock seat's props the entry reads. */
+/** The dock seat's props the entry reads, plus what the entry wires in for it. */
 export interface SpineDockProps {
-  useProjection(key: typeof TREE_PROJECTION): SpineTree | null | undefined;
+  useProjection(key: typeof TREE_PROJECTION): SpineView | undefined;
+  sessionId: string;
+  /** Raise or clear the session's composer block: why its input is inert. */
+  setBlock(sessionId: string, reason: string | null): void;
+  /** Open a new session in the current workspace. */
+  newSession(): void;
 }
 
 interface DockRow {
@@ -49,16 +54,24 @@ interface Marker {
 
 const BODY_ID = "spinejit-dock-body";
 
+/** In the composer of a session whose log began before Spine: what to do instead. */
+const LEGACY_REASON = "This session began before Spine. Start a new session to continue.";
+
+/** In the dock of that session: why the tree does not cover it. */
+const LEGACY_NOTICE = "This session's history is outside the Spine tree.";
+
 /** The dock entry: a collapsed summary of the cursor, expanding into the whole current tree. */
-export function SpineDock({ useProjection }: SpineDockProps): ReactElement | null {
-  const tree = useProjection(TREE_PROJECTION);
+export function SpineDock({ useProjection, sessionId, setBlock, newSession }: SpineDockProps): ReactElement | null {
+  const view = useProjection(TREE_PROJECTION);
+  const tree = view?.tree ?? null;
+  const legacy = view?.legacy === true;
   const [open, setOpen] = useState(false);
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
   const [locateNonce, setLocateNonce] = useState(0);
   const scroller = useRef<HTMLDivElement | null>(null);
   const cursorRow = useRef<HTMLDivElement | null>(null);
 
-  const shown = tree !== null && tree !== undefined && showsTree(tree) ? tree : null;
+  const shown = tree !== null && showsTree(tree) ? tree : null;
   const index = useMemo(() => indexTree(shown === null ? [] : shown.nodes), [shown]);
   const rows = useMemo(() => visibleRows(index, collapsed), [index, collapsed]);
   const cursorNode = shown === null ? null : shown.nodes.find((node) => node.nodeId === shown.cursor) ?? null;
@@ -102,9 +115,21 @@ export function SpineDock({ useProjection }: SpineDockProps): ReactElement | nul
     scrollToCursor();
   }, [open, locateNonce]);
 
-  if (tree === undefined) return null;
+  // The host marks a session whose log began before Spine, where the tree
+  // cannot account for its history: say so, and leave its input inert here
+  // rather than let it grow a history the tree does not cover. Page-local, as
+  // the block registry is: leaving the session clears it.
+  useEffect(() => {
+    if (!legacy) return;
+    setBlock(sessionId, LEGACY_REASON);
+    return () => setBlock(sessionId, null);
+  }, [legacy, sessionId, setBlock]);
 
-  const summary = shown === null
+  if (view === undefined) return null;
+
+  const summary = legacy && shown === null
+    ? "Started before Spine"
+    : shown === null
     ? "Waiting for the first Spine task"
     : cursorNode === null ? "Spine Tree" : labelOf(cursorNode, true);
 
@@ -163,8 +188,16 @@ export function SpineDock({ useProjection }: SpineDockProps): ReactElement | nul
       {open
         ? (
           <div className="sj-body" id={BODY_ID}>
+            {legacy
+              ? (
+                <div className="sj-legacy">
+                  <span className="sj-legacyText">{LEGACY_NOTICE}</span>
+                  <Button type="button" variant="ghost" size="sm" onClick={newSession}>New session</Button>
+                </div>
+              )
+              : null}
             {shown === null
-              ? <div className="sj-notice">The tree appears after Spine opens its first task.</div>
+              ? (legacy ? null : <div className="sj-notice">The tree appears after Spine opens its first task.</div>)
               : (
                 <div
                   className="sj-scroll"

@@ -110,8 +110,16 @@ The tree Pi pins above its editor, drawn by the same code
   (`client/spine-dock.css`) is compiled into the bundle and rendered with the
   dock, since the web client loads only the module. The host appends a
   `plugin:spinejit/tree` record (`{cursor, nodes}`) to a session's log
-  whenever what its tree shows changes, and the session projection
-  `spinejit` serves the latest one to clients.
+  whenever what its tree shows changes; the session projection `spinejit`
+  folds those records and serves `{tree, legacy}` to clients.
+
+A session whose log began before this plugin did — it holds a response with no
+Spine sampling in front of it — keeps its history readable, but the tree
+cannot account for that history. The projection computes `legacy` from the log
+itself, so a client knows it before any agent runs in the session; the web
+client then leaves the composer inert (`conversation.blocks`) with a reason
+and offers a new session from the dock. The block is page-local, so it follows
+the session the page shows.
 
 Sessions logged by dsh-spinejit 0.1.1 and earlier carry `[U<n>]` in the user
 text. For them the web and desktop client hide that line in the bubble:

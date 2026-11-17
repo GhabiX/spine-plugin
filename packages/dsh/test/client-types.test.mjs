@@ -46,7 +46,12 @@ test("a consumer outside the workspace resolves the client types from the declar
   await writeFile(consumer, [
     'import type { SpineDockProps } from "@spinejit/dsh-spinejit/client";',
     "",
-    "export const props: SpineDockProps = { useProjection: () => null };",
+    "export const props: SpineDockProps = {",
+    "  useProjection: () => ({ tree: null, legacy: false }),",
+    '  sessionId: "session",',
+    "  setBlock: (_sessionId, _reason) => {},",
+    "  newSession: () => {},",
+    "};",
     "",
   ].join("\n"));
 

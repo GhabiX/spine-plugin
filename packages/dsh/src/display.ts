@@ -6,8 +6,9 @@ import { appendPluginRecord, pluginRecordOf, type Session, type SessionEvent } f
 import type { SpineProjection } from "@spinejit/spine-sdk";
 import { z } from "zod";
 
+import { beginsSampling } from "./events.js";
 import { sessionBirth } from "./spawn.js";
-import { spineTreeOf, TREE_PROJECTION, TREE_RECORD, type SpineTree } from "./tree.js";
+import { spineTreeOf, TREE_PROJECTION, TREE_RECORD, type SpineTree, type SpineView } from "./tree.js";
 
 declare module "@deepseek-ai/dsh-session" {
   interface PluginRecordMap {
@@ -30,25 +31,44 @@ const treeSchema: z.ZodType<SpineTree> = z.object({
   })),
 });
 
-const stateSchema = treeSchema.nullable();
+const stateSchema = z.object({
+  /** The tree of the latest readable record, null before the first. */
+  tree: treeSchema.nullable(),
+  /** See {@link SpineView.legacy}. */
+  legacy: z.boolean(),
+  /** A Spine sampling has been folded, so no later response can make the log legacy. */
+  sampling: z.boolean(),
+});
+
+type State = z.infer<typeof stateSchema>;
+
+const viewSchema = z.object({
+  tree: treeSchema.nullable(),
+  legacy: z.boolean(),
+});
 
 /**
- * The session projection clients read the tree from: the tree of the latest
- * record, null before the first. A record this build cannot read leaves the
- * tree as it was.
+ * The session projection clients read: the tree the log last recorded, and
+ * whether the log began before this plugin did. A record this build cannot
+ * read leaves the tree as it was.
  */
 export const treeProjection = {
   key: TREE_PROJECTION,
-  stateVersion: 1,
+  stateVersion: 2,
   stateSchema,
-  init: (): SpineTree | null => null,
-  apply(state: SpineTree | null, event: SessionEvent): SpineTree | null {
+  init: (): State => ({ tree: null, legacy: false, sampling: false }),
+  apply(state: State, event: SessionEvent): State {
     const record = pluginRecordOf(event);
-    if (record?.type !== TREE_RECORD) return state;
-    const tree = treeSchema.safeParse(record.data);
-    return tree.success ? tree.data : state;
+    const parsed = record?.type === TREE_RECORD ? treeSchema.safeParse(record.data) : null;
+    const tree = parsed?.success === true ? parsed.data : state.tree;
+    // A response logged with no sampling slot in front of it is history this
+    // plugin never observed. A slot folded first settles the other way, for good.
+    const legacy = state.legacy || (!state.sampling && event.type === "assistant/message");
+    const sampling = state.sampling || beginsSampling(event);
+    if (tree === state.tree && legacy === state.legacy && sampling === state.sampling) return state;
+    return { tree, legacy, sampling };
   },
-  wire: { viewSchema: stateSchema, view: (state: SpineTree | null): SpineTree | null => state },
+  wire: { viewSchema, view: (state: State): SpineView => ({ tree: state.tree, legacy: state.legacy }) },
 };
 
 /**
