@@ -263,10 +263,9 @@ export class SpineAgent {
       if (endsSampling(event) || event.seq === cut) await this.#settle(event.seq);
       if (event.seq === cut) await this.#guard(() => this.#continueNamespace(event.seq));
       this.accept(event);
-      // With Spine, a user message is numbered before the model answers it.
-      if (event.type === "assistant/message" && [...this.#userNumbers.keys()].some((seq) => !this.#anchored.has(seq))) {
-        throw new SpineDshError(`session ${this.agent.id} started without Spine: its user messages carry no [U#]`);
-      }
+      // A log written before Spine ran carries no [U#]: keep its history as plain
+      // sources instead of refusing it. The next sampling numbers those user
+      // messages, and the request after it shows them numbered.
       if (beginsSampling(event)) {
         await this.#guard(async () => {
           await this.#prepare();

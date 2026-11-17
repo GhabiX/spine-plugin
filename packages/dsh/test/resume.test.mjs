@@ -111,17 +111,35 @@ async function asLoggedBy011(root) {
   return rewritten;
 }
 
-test("a session that started without Spine is refused, not adopted with unnumbered users", async () => {
-  const first = await mountDsh(["hello"], { plugin: false });
+test("a session that started without Spine is adopted: readable as logged, and its users numbered by the next sampling", async () => {
+  const first = await mountDsh(["reply-1", "reply-2"], { plugin: false });
   let id;
   try {
-    id = (await first.run("hi")).id;
+    id = (await first.run("hello")).id;
+    await first.send(first.agent, "second legacy message");
   } finally {
     await first.dispose();
   }
-  const second = await mountDsh([], { root: first.root });
+  const second = await mountDsh(["reply-3", "reply-4"], { root: first.root });
   try {
-    await assert.rejects(second.resume(id), /started without Spine/);
+    const agent = await second.resume(id);
+    const logged = () => agent.session.snapshotEvents();
+    assert.deepEqual(logged().filter((event) => event.type === "plugin:spinejit/user-anchors"), [],
+      "opening the history writes no anchor record");
+    assert.deepEqual(logged().filter((event) => event.type === "user/message" && event.data.source.kind === "user")
+      .map((event) => event.data.content[0].text),
+      ["hello", "second legacy message"], "the history is readable as logged");
+
+    await second.send(agent, "new message");
+    await second.send(agent, "another message");
+    const [request1, request2] = second.adapter.requests.map(shown);
+    assert.deepEqual(request1.filter((line) => line.startsWith("user: ")),
+      ["user: hello", "user: second legacy message", "user: new message"], "the first request shows the legacy users as written");
+    assert.deepEqual(request2.filter((line) => line.startsWith("user: ")),
+      ["user: [U1]\nhello", "user: [U2]\nsecond legacy message", "user: [U3]\nnew message", "user: another message"],
+      "from the next request on, the adopted users are numbered");
+    assert.deepEqual(ends(agent), ["completed", "completed", "completed", "completed"],
+      "the two legacy turns replay as completed, and so do the two new ones");
   } finally {
     await second.dispose();
   }
