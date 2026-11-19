@@ -1,6 +1,6 @@
 {
   "name": "@spinejit/pi-spinejit",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "type": "module",
   "license": "Apache-2.0",
   "author": "GhabiX",
@@ -16,12 +16,17 @@
   "homepage": "https://github.com/GhabiX/spine-plugin#readme",
   "keywords": [
     "pi-package",
+    "pi",
+    "pi-coding-agent",
+    "pi-extension",
+    "context-management",
     "spinejit"
   ],
   "pi": {
     "extensions": [
       "./dist/pi/extension.js"
-    ]
+    ],
+    "image": "https://raw.githubusercontent.com/GhabiX/spine-plugin/main/doc/images/pi-spine.gif"
   },
   "exports": {
     "./pi/tree-view": {

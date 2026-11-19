@@ -1,6 +1,6 @@
 // A real DeepSeek Harness world for tests: the production AgentLoop, session
 // store and official JSONL persistence, with a scripted model adapter.
-import { cp, mkdtemp } from "node:fs/promises";
+import { cp, mkdtemp, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Context } from "@deepseek-ai/cordis";
@@ -71,7 +71,7 @@ export class ScriptedAdapter extends LlmAdapter {
  * @param root an earlier world's directory, to resume its persisted sessions.
  */
 export async function mountDsh(replies, { plugin = true, root } = {}) {
-  root ??= await mkdtemp(join(tmpdir(), "dsh-spinejit-"));
+  root ??= await realpath(await mkdtemp(join(tmpdir(), "dsh-spinejit-")));
   const ctx = new Context();
   await mountAgentLoopTestDependencies(ctx, { workingDirectory: true });
   await ctx.plugin(Jsonl, { root: join(root, "sessions"), compression: "none" });
