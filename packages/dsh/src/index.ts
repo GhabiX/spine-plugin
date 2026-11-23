@@ -64,6 +64,12 @@ export function apply(ctx: Context): void {
   }) as never);
   registerTreeView(ctx, display);
 
+  function rememberClaim(agent: Agent, producer: string): void {
+    let recovered = recoveredClaims.get(agent);
+    if (recovered === undefined) recoveredClaims.set(agent, recovered = new Set());
+    recovered.add(producer);
+  }
+
   ctx.on("session/event", (session, event) => {
     agents.get(session.id)?.accept(event);
     if (event.type === "agent/inbox/spliced" && event.data.inserted.length > 0) world.idle.get(session.id)?.input();
@@ -110,11 +116,6 @@ export function apply(ctx: Context): void {
         source.kind === "spine-arrival" && keyOf(source.arrival.producer) === producer);
     let wakingArrival: string | undefined;
     let stoppedBatch: UserMessage[] | undefined;
-    function rememberClaim(producer: string): void {
-      let recovered = recoveredClaims.get(agent);
-      if (recovered === undefined) recoveredClaims.set(agent, recovered = new Set());
-      recovered.add(producer);
-    }
     // An arrival enters only the session that bore it, once, while its birth is
     // open. The inbox is durable, so one pending there has already been sent.
     const own = new SpawnChildren((arrival, wake) => {
@@ -122,7 +123,7 @@ export function apply(ctx: Context): void {
       const alreadyClaimed = claimedArrivals.has(producer);
       if (!alreadyClaimed && !awaitingArrival(producer)) return;
       if (alreadyClaimed || recoveredInStep !== undefined) {
-        rememberClaim(producer);
+        rememberClaim(agent, producer);
         if (!alreadyClaimed) {
           recoveredInStep?.push(arrivalMessage(arrival));
           claimedArrivals.add(producer);
@@ -317,6 +318,13 @@ export function apply(ctx: Context): void {
     // this decision instead of queueing them for a second model request.
     const recovered: UserMessage[] | undefined = payload.messages.some(({ source }) => source.kind === "user") ? [] : undefined;
     const spine = await attachAgent(agent, payload.messages, undefined, recovered);
+    // DSH removes these arrivals from the inbox before deciding whether the
+    // step is admitted. Protect claims on every step, including arrivals parked
+    // by earlier background recovery on an already attached agent. Idle settles
+    // redeliver them without waking until their sources actually reach the log.
+    for (const { source } of payload.messages) {
+      if (source.kind === "spine-arrival") rememberClaim(agent, source.arrival.producer.join("."));
+    }
     const cancellations: UserMessage[] = [];
     stepCancellations.set(agent, cancellations);
     try {

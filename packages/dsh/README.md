@@ -140,9 +140,10 @@ Tests run the production DSH AgentLoop, session store and official JSONL
 persistence with a scripted model adapter (`test/harness.mjs`), and load the
 plugin through the Cordis Loader as a DSH bundle does. Each scenario also
 checks that the official JSONL restore, without the plugin, equals the live
-context. The 79 tests cover images, ordinary/truncated Forks, pending-source
+context. The 83 tests cover images, ordinary/truncated Forks, pending-source
 recovery, literal user anchors, context slots, cached usage, nested Spawn,
-Stop races, and plugin reload. These are scripted headless tests, not a
+Stop races, and plugin reload, including parked results claimed by rejected
+steps after background recovery. These are scripted headless tests, not a
 browser layout or paid-model end-to-end claim.
 
 From the workspace root:
