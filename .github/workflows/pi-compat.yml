@@ -1,0 +1,74 @@
+name: Pi clean-install compatibility
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'packages/plugin/**'
+      - 'packages/host/**'
+      - 'packages/sdk/**'
+      - 'fixtures/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'tsconfig.base.json'
+      - '.github/workflows/pi-compat.yml'
+  push:
+    branches: [main, 'release/pi-*']
+    paths:
+      - 'packages/plugin/**'
+      - 'packages/host/**'
+      - 'packages/sdk/**'
+      - 'fixtures/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'tsconfig.base.json'
+      - '.github/workflows/pi-compat.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  pi-clean-install:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['22.19.0', '25']
+        pi: ['1.1.0', '1.5.1']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      # The gate snapshots source without dist/node_modules/locks, installs with
+      # --ignore-scripts, builds privately in dependency order, dry-runs and packs
+      # all three packages, then tests installed dist and the real CLI alongside
+      # an auto-discovered unrelated local extension (never an agent's real home).
+      # No root npm install, shared build output or destructive cleanup.
+      - name: Check, build, pack, clean install, lifecycle suite and real Pi CLI
+        run: |
+          VERSION="$(node -p 'JSON.parse(require("node:fs").readFileSync("packages/plugin/package.json", "utf8")).version')"
+          node packages/plugin/scripts/verify-release.mjs "$RUNNER_TEMP/pi-clean-install" '${{ matrix.pi }}' "$VERSION"
+      - name: Retain release evidence (including failures)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pi-${{ matrix.pi }}-node-${{ matrix.node }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/pi-clean-install/result.json
+            ${{ runner.temp }}/pi-clean-install/gate-scripts/
+            ${{ runner.temp }}/pi-clean-install/gate-script-hashes.json
+            ${{ runner.temp }}/pi-clean-install/pi-*/result.json
+            ${{ runner.temp }}/pi-clean-install/pi-*/logs/
+            ${{ runner.temp }}/pi-clean-install/pi-*/packs/
+            ${{ runner.temp }}/pi-clean-install/pi-*/snapshot.json
+            ${{ runner.temp }}/pi-clean-install/pi-*/comparable-snapshot.json
+            ${{ runner.temp }}/pi-clean-install/pi-*/test-inventory.json
+            ${{ runner.temp }}/pi-clean-install/pi-*/*bindings.json
+            ${{ runner.temp }}/pi-clean-install/pi-*/cli-*.json
+            ${{ runner.temp }}/pi-clean-install/pi-*/cli*.jsonl
+            ${{ runner.temp }}/pi-clean-install/pi-*/cli.stderr.log
+            ${{ runner.temp }}/pi-clean-install/pi-*/provider-requests.json

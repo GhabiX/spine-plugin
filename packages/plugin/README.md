@@ -180,6 +180,14 @@ other calls' results exist. A birth record shows only the branch's id and
 summary: the assignment is in the parent's own `spine_spawn` call and is
 addressed to the child.
 
+## Compaction summary budget
+
+Compaction requests use the active model's `maxTokens`, not a fraction of
+`reserveTokens`, matching current Pi's native summary output limit. Reasoning
+shares the output budget: a smaller reserve-derived cap can end a request before
+any summary text is produced. Empty, failed, and aborted summaries still cancel
+compaction without replacing the session context.
+
 ## Sampling boundary
 
 One Spine sampling is one Pi agent-loop model request. It begins in the

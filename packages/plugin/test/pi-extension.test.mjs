@@ -1738,7 +1738,7 @@ test("Pi compaction summarizes the published model context plus one request", as
   assert.equal(instruction.role, "user");
   assert.match(instruction.content[0].text, /^Create a concise structured continuation summary/);
   assert.match(instruction.content[0].text, /earlier summary/);
-  assert.equal(requestOptions.maxTokens, 41943);
+  assert.equal(requestOptions.maxTokens, 131072);
   assert.equal(requestMessages.some((message) => message.role === "system"), false);
   assert.equal(ctx.aborts, 0);
 });
@@ -1802,7 +1802,7 @@ test("Pi compaction passes the current tool declarations with the model context"
   assert.equal(ctx.aborts, 0);
 });
 
-test("Pi compaction summary output cap follows the native reserve formula", async () => {
+test("Pi compaction summary output cap follows the model output limit", async () => {
   const pi = mockPi();
   const ctx = extensionContext();
   const visible = user("visible");

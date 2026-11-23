@@ -4,6 +4,40 @@ The SpineTree release gate that preceded this section described the former
 `@spinetree/plugin`; it is archived with that package in
 [`archive/spinetree_plugin_20261027`](../archive/spinetree_plugin_20261027/RELEASE.md).
 
+## Pi 0.1.8 validation
+
+The 0.1.8 candidate changes only two runtime behaviors: compaction uses the
+model's output limit, and `spine_spawn` shares the other control tools' admission
+check after a durability fault. Provider-normalized usage counters remain strict;
+no missing-cache fallback or fractional-token rounding is added. The development
+host baseline remains 1.1.0 and all existing peer ranges remain unchanged.
+
+Run the workspace checks before the isolated release gate:
+
+```bash
+npm run check
+npm test
+```
+
+For each Node version (22.19+ and 25), use a new absolute evidence directory
+outside the checkout. The gate retains successful and failed outputs and never
+reuses a previous run:
+
+```bash
+node packages/plugin/scripts/verify-release.mjs /absolute/new/evidence all 0.1.8
+```
+
+This checks Pi 1.1.0 and 1.5.1 in separate source builds and clean tarball
+consumers, including type checking, every plugin test, explicit dry-run/actual
+packing, installed-byte hashes, dependency bindings and real Pi CLI discovery
+with an offline provider and an independently discovered neighboring extension.
+The CI matrix covers both Node versions and both hosts. Two existing optional
+source-checkout/tsx tests skip when a Pi source checkout is unavailable; the
+installed CLI smoke runs separately. Fork, recovery, child cancellation and
+compaction also have targeted tests; do not confuse those fixtures with live
+provider or interactive TUI testing. This gate does not load a user's agent home
+or prove arbitrary third-party extension combinations compatible.
+
 ## npm publishing
 
 The public Pi extension is `@spinejit/pi-spinejit`; SDK and host remain

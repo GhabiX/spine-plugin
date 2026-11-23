@@ -769,7 +769,7 @@ async function summarizePiCompaction(
       ],
     },
     {
-      maxTokens: piNativeSummaryMaxTokens(event.preparation.settings.reserveTokens, model.maxTokens),
+      maxTokens: model.maxTokens,
       signal: event.signal,
       cacheRetention: "none",
       sessionId: randomUUID(),
@@ -812,13 +812,6 @@ function currentPiToolDeclarations(branchEntries: readonly SessionEntry[]): PiTo
     }
   }
   return [...tools.values()];
-}
-
-function piNativeSummaryMaxTokens(reserveTokens: number, modelMaxTokens: number): number {
-  return Math.min(
-    Math.floor(0.8 * reserveTokens),
-    modelMaxTokens > 0 ? modelMaxTokens : Number.POSITIVE_INFINITY,
-  );
 }
 
 /**
@@ -1135,7 +1128,7 @@ async function executePiChild(
   return { ...terminal, diagnostic: terminal.diagnostic === undefined ? exit : `${terminal.diagnostic}; ${exit}`, executionRef };
 }
 
-const CONTROL_TOOLS = ["spine_open", "spine_close", "spine_next"] as const;
+const CONTROL_TOOLS = ["spine_open", "spine_close", "spine_next", "spine_spawn"] as const;
 
 function controlToolAdmission(
   slot: MutableSessionSlot,
