@@ -3,8 +3,8 @@
 SpineJIT context management for DeepSeek Harness (DSH), backed by the portable
 Spine SDK. Version `0.1.4` is developed against DSH `0.2.2-rc.5` and also
 validated against `0.2.1-rc.2`; a bundle loads it as the Cordis plugin `spinejit`.
-Development uses Cordis `~4.1.0` and Loader `~1.1.0`; the peer range also
-accepts Cordis `~4.0.5` for the older host. Other DSH releases are not claimed.
+Development uses Cordis `~4.1.0` and Loader `~1.1.0`, while the engine/peer
+range preserves `0.2.x` prerelease and Cordis `4.x` install compatibility.
 
 ## Install
 
