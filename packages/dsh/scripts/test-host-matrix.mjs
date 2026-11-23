@@ -16,7 +16,7 @@ for (const host of requested ? [requested] : hosts) {
   const root = join(destination, host);
   const pkg = join(root, "packages", "dsh");
   await mkdir(pkg, { recursive: true });
-  for (const name of ["src", "test", "scripts", "tsconfig.json", "README.md", "LICENSE", "cordis.patch.yml"]) {
+  for (const name of ["src", "test", "scripts", "tsconfig.json", "README.md", "LICENSE", "cordis.patch.yml", "screenshots.json"]) {
     await cp(join(source, name), join(pkg, name), { recursive: true });
   }
   await cp(resolve(source, "../../tsconfig.base.json"), join(root, "tsconfig.base.json"));
