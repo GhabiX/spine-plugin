@@ -1,5 +1,6 @@
-import { freezeMessage, type ContentBlock, type Message } from "@deepseek-ai/dsh-llm";
-import { appendPluginRecord, type Session, type SessionSeq } from "@deepseek-ai/dsh-session";
+import { isDeepStrictEqual } from "node:util";
+import { freezeMessage, type ContentBlock, type Message, type UserMessage } from "@deepseek-ai/dsh-llm";
+import { appendPluginRecord, type Session, type SessionEvent, type SessionSeq } from "@deepseek-ai/dsh-session";
 import type { SessionMessageProjection, SessionMessageProjectionContext } from "@deepseek-ai/dsh-session/surface";
 
 // The Spine core numbers the messages the user wrote `[U<n>]`, and the model
@@ -13,8 +14,8 @@ import type { SessionMessageProjection, SessionMessageProjectionContext } from "
 // without this plugin skips it and resumes the session without the numbers.
 //
 // Sessions logged by dsh-spinejit 0.1.1 and earlier carry the number in the
-// message text itself. Such a message counts as numbered when its text starts
-// with its own number.
+// message text itself. During replay, sampling markers distinguish these
+// numbered messages from new, as-yet-unsampled user input.
 
 export const USER_ANCHORS = "plugin:spinejit/user-anchors";
 
@@ -36,9 +37,13 @@ declare module "@deepseek-ai/dsh-session/types" {
 
 const ANCHOR = /^\[U(\d+)\]\n/;
 
+export function anchorPrefix(anchor: number): string {
+  return `[U${anchor}]\n`;
+}
+
 /** The user message with `[U<anchor>]` in front of its first text, as the Spine plan shows it. */
 export function anchored<M extends Message>(message: M, anchor: number): M {
-  const prefix = `[U${anchor}]\n`;
+  const prefix = anchorPrefix(anchor);
   const content = [...message.content] as ContentBlock[];
   const first = content.findIndex((block) => block.type === "text");
   if (first < 0) {
@@ -50,16 +55,31 @@ export function anchored<M extends Message>(message: M, anchor: number): M {
   return freezeMessage({ ...message, content } as Message) as M;
 }
 
-/** The `[U<n>]` a message's first text starts with, or null. */
-export function anchorOf(message: Message): number | null {
-  const first = message.content.find((block) => block.type === "text");
-  const match = first === undefined ? null : ANCHOR.exec((first as { text: string }).text);
-  return match === null ? null : Number(match[1]);
+/** The first text block of a message. Anchors are prepended to this block. */
+export function firstText(message: Message): string | undefined {
+  return message.content.find((block) => block.type === "text")?.text;
 }
 
 /** The text without the `[U<n>]` it starts with. */
 export function withoutAnchor(text: string): string {
   return text.replace(ANCHOR, "");
+}
+
+/** Confirm an inline anchor against the last queued copy of this message. */
+export function hasRepairedInlineAnchor(
+  events: ReadonlyMap<number, SessionEvent>, seq: SessionSeq, message: UserMessage, anchor: number,
+): boolean {
+  for (let previous = Number(seq) - 1; previous >= 0; previous -= 1) {
+    const event = events.get(previous);
+    if (event?.type !== "agent/inbox/spliced") continue;
+    for (let index = event.data.inserted.length - 1; index >= 0; index -= 1) {
+      const original = event.data.inserted[index]!;
+      if (original.id === message.id && original.source.kind === "user") {
+        return isDeepStrictEqual(anchored(original, anchor).content, message.content);
+      }
+    }
+  }
+  return false;
 }
 
 export const userAnchorsProjection = {

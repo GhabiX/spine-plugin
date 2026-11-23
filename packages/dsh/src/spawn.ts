@@ -1,3 +1,4 @@
+import { addAbortListener } from "node:events";
 import type { Context } from "@deepseek-ai/cordis";
 import type { Agent } from "@deepseek-ai/dsh-agent";
 import { buildForkSeed, isAppendSurfaceEvent, SessionId, SessionSeq, type SessionEvent } from "@deepseek-ai/dsh-session";
@@ -25,8 +26,8 @@ export interface SpineWorld {
   ctx: Context;
   agents: ReadonlyMap<string, SpineAgent>;
   children: ReadonlyMap<string, SpawnChildren>;
-  /** What to check each time a Spawn child agent goes idle, by agent id. */
-  idle: Map<string, () => void>;
+  /** How to settle an idle Spawn child and release its wait when input arrives. */
+  idle: Map<string, { settle(aborted: boolean): void; input(): void }>;
   /** The seed of each Spawn child being started, by its session id. */
   starting: Map<string, readonly SessionEvent[]>;
 }
@@ -49,17 +50,29 @@ export function sessionBirth(id: string): number[] | null {
  * already; the turn's end reason adds nothing to it.
  */
 function* childLog(events: readonly SessionEvent[]): Generator<ChildLogItem> {
-  const spawns = new Map<string, string>();
+  const pendingCalls = new Map<number, SessionEvent<"tool/call">>();
   for (const event of events) {
-    if (event.type === "tool/call" && event.data.name === "spine_spawn") {
-      spawns.set(event.data.callId, event.data.arguments);
-    } else if (event.type === "turn/end" && event.data.reason.kind === "error") {
-      yield { type: "error", message: event.data.reason.error.message };
+    if (event.type === "tool/call") {
+      pendingCalls.set(event.seq, event);
+    } else if (event.type === "step/end" || event.type === "turn/start" || event.type === "turn/end") {
+      pendingCalls.clear();
+      if (event.type === "turn/end" && event.data.reason.kind === "error") {
+        yield { type: "error", message: event.data.reason.error.message };
+      }
     } else if (isAppendSurfaceEvent(event) && surfaceRole(event) === "source") {
       if (event.type === "tool/result") {
-        // A Spawn call whose result succeeded passed admission, so its arguments decode.
-        const call = event.data.message.isError === true ? undefined : spawns.get(event.data.message.toolCallId);
-        yield call === undefined ? { type: "other" } : { type: "spawn", births: (JSON.parse(call) as { tasks: unknown[] }).tasks.length };
+        // DSH links the result to its exact call. Logs without links can only
+        // pair an unambiguous pending call from the same turn and step.
+        const { turn, step, message } = event.data;
+        const candidates = event.sourceEventSeqs?.map((seq) => pendingCalls.get(seq)) ?? [...pendingCalls.values()];
+        const matching = candidates.filter((call) => call !== undefined && call.data.turn === turn &&
+          call.data.step === step && call.data.callId === message.toolCallId);
+        const call = matching.length === 1 ? matching[0] : undefined;
+        if (call !== undefined) pendingCalls.delete(call.seq);
+        // A successful Spawn passed admission, so its arguments decode.
+        yield call?.data.name === "spine_spawn" && message.isError !== true
+          ? { type: "spawn", births: (JSON.parse(call.data.arguments) as { tasks: unknown[] }).tasks.length }
+          : { type: "other" };
         continue;
       }
       const character = sourceCharacter(event);
@@ -107,20 +120,44 @@ export async function executeChild(
   let arrived!: (arrival: SpawnArrival) => void;
   const arrival = new Promise<SpawnArrival>((resolve) => { arrived = resolve; });
   let ended = false;
+  let releaseWait: (() => void) | undefined;
   const end = (terminal: SpawnChildTerminal) => {
     if (ended) return;
     ended = true;
-    const result = toArrival(birth.producer, terminal, signal.aborted);
+    releaseWait?.();
+    const result = toArrival(birth.producer, terminal, signal.aborted || terminal.outcome === "aborted");
     arrive(result);
     arrived(result);
   };
-  world.idle.set(id, () => {
-    const { open, terminal } = childState(childLog(world.agents.get(id)!.agent.session.ownEvents()));
-    if (signal.aborted && terminal?.outcome !== "completed") end({ outcome: "aborted" });
+  const settle = (aborted: boolean) => {
+    if (ended) return;
+    const child = world.agents.get(id)!.agent;
+    const { open, terminal } = childState(childLog(child.session.ownEvents()));
+    if ((aborted || signal.aborted) && terminal?.outcome !== "completed") end({ outcome: "aborted" });
     else if (terminal !== null) end(terminal);
-    // An open birth's arrival is still to come, and it wakes the child.
     else if (open === 0) end({ outcome: "errored", diagnostic: "the child went idle without a final reply" });
-  });
+    else if (releaseWait === undefined && child.inbox.nextStep.length === 0 && child.inbox.nextTurn.length === 0) {
+      // The host may dispose an idle child with no queued input. Keep its activation
+      // available for the next descendant result without starting a model turn.
+      let release!: () => void;
+      const wait = new Promise<void>((resolve) => { release = resolve; });
+      void child.runMaintenance(async (stop) => {
+        releaseWait = release;
+        const listener = addAbortListener(stop, release);
+        try {
+          await wait;
+          if (stop.aborted && !ended) {
+            world.children.get(id)?.stop();
+            end({ outcome: "aborted" });
+          }
+        } finally {
+          listener[Symbol.dispose]();
+          releaseWait = undefined;
+        }
+      }).catch((error: unknown) => world.ctx.logger.error(error));
+    }
+  };
+  world.idle.set(id, { settle, input: () => releaseWait?.() });
   // Cancelling an idle child starts no turn, so it arrives at once. A child
   // still being started is cancelled by the manager, through the same signal.
   const cancel = () => {
@@ -135,14 +172,18 @@ export async function executeChild(
   let activation: SubagentActivation | undefined;
   try {
     try {
-      activation = await world.ctx.subagents.startActivation({
+      const request = { parent, prompt: [{ type: "text" as const, text: spineChildAssignmentText(birth.task, peers) }] };
+      // Older DSH reads request.parent/prompt; newer DSH reads the same fields at the top level.
+      const spec = {
         provider: SPINE_SUBAGENT_PROVIDER,
         label: birth.task.summary,
         childId: id,
-        request: { parent, prompt: [{ type: "text", text: spineChildAssignmentText(birth.task, peers) }] },
+        ...request,
+        request,
         signal,
-        delivery: "caller",
-      });
+        delivery: "caller" as const,
+      };
+      activation = await world.ctx.subagents.startActivation(spec);
     } finally {
       world.starting.delete(id);
       started();
@@ -155,18 +196,17 @@ export async function executeChild(
   }
 }
 
-/**
- * After a restart no child runs. A child whose log ends it arrives as it
- * ended; every other open birth arrives aborted. None wakes the agent.
- */
+/** Read final results from each child's own log before reporting unfinished children as aborted. */
 export async function recoverChildren(
   world: SpineWorld,
   parent: Agent,
   births: readonly SpawnBirth[],
-  children: SpawnChildren,
-): Promise<void> {
+  beforeRead: (id: SessionId) => Promise<void>,
+): Promise<SpawnArrival[]> {
+  const arrivals: SpawnArrival[] = [];
   for (const birth of births) {
     const id = childSessionId(parent.id, birth.producer);
+    await beforeRead(id);
     let terminal: SpawnChildTerminal | null = null;
     if ((await world.ctx.sessionPersistence.stat(id)) !== undefined) {
       const handle = await world.ctx.sessionPersistence.open(id, "read");
@@ -176,7 +216,8 @@ export async function recoverChildren(
         await handle.close();
       }
     }
-    children.redeliver(toArrival(birth.producer, terminal
+    arrivals.push(toArrival(birth.producer, terminal
       ?? { outcome: "aborted", diagnostic: "the parent session restarted before this child returned" }));
   }
+  return arrivals;
 }

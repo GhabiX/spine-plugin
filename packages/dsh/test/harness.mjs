@@ -13,6 +13,19 @@ import SubagentRuntime from "@deepseek-ai/dsh-subagent";
 
 const PLUGIN = new URL("../dist/index.js", import.meta.url).href;
 
+/** Remount the bundle without recreating the agent. */
+export async function reloadSpine(dsh, agent) {
+  const entry = dsh.ctx.loader.resolve("spinejit");
+  const prior = entry.fiber;
+  await entry.update({ disabled: true });
+  await prior.dispose();
+  await entry.update({ disabled: false });
+  await dsh.ctx.loader.await();
+  if (entry.fiber === prior || dsh.ctx.agents.get(agent.id) !== agent) {
+    throw new Error("Expected the plugin to remount and keep the existing agent");
+  }
+}
+
 /** Answers each request with the next scripted reply; records every request. */
 export class ScriptedAdapter extends LlmAdapter {
   requests = [];
@@ -22,9 +35,10 @@ export class ScriptedAdapter extends LlmAdapter {
    * @param replies one per request, or an object of such lists by session id
    *   when several sessions run: a string is text, an array is tool calls
    *   `[name, input]`, `{ reasoning, calls }` is those calls after a reasoning
-   *   block, `{ text, finish }` is text that ends with that finish
-   *   kind (null: the stream ends without a finish chunk), `{ fail }` throws that message, `{ hang: true }` waits for the
-   *   request to be aborted, and a function of the request returns the reply.
+   *   block, `{ text, finish, usage }` is text with that finish kind and optional
+   *   usage (null finish: the stream ends without a finish chunk), `{ fail }`
+   *   throws that message, `{ hang: true }` waits for the request to be aborted,
+   *   and a function of the request returns the reply.
    */
   constructor(replies) {
     super();
@@ -59,6 +73,7 @@ export class ScriptedAdapter extends LlmAdapter {
       yield { type: "block-start", index, blockType: block.type };
       yield { type: "block-end", index, block };
     }
+    if (reply.usage !== undefined) yield { type: "usage", usage: reply.usage };
     if (reply.finish === null) return;
     yield { type: "finish", reason: { kind: reply.finish ?? (text !== undefined ? "stop" : "tool-calls") } };
   }
@@ -115,7 +130,8 @@ export async function mountDsh(replies, { plugin = true, root } = {}) {
       while (true) {
         await agent.whenIdle();
         const idleSeq = agent.session.seq;
-        if (!await ctx.subagents.waitForChildren(agent) && agent.status === "idle" && agent.session.seq === idleSeq) break;
+        const joined = await (ctx.subagents.waitForTreeWork?.(agent) ?? ctx.subagents.waitForChildren(agent));
+        if (!joined && agent.status === "idle" && agent.session.seq === idleSeq) break;
       }
       return agent;
     },
@@ -142,7 +158,9 @@ export async function mountDsh(replies, { plugin = true, root } = {}) {
     },
     /** The files a killed process leaves: each session flushed, copied before disposal can tidy them. */
     async crashed() {
-      for (const session of ctx.sessions.list()) await ctx.sessions.flush(session);
+      for (const session of ctx.sessions.list()) {
+        if (ctx.sessions.get(session.id) === session) await ctx.sessions.flush(session);
+      }
       const copy = await mkdtemp(join(tmpdir(), "dsh-spinejit-"));
       await cp(root, copy, { recursive: true });
       return copy;

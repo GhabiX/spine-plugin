@@ -308,7 +308,8 @@ own session.
 
 The previous adapter targeted an older DSH and the blocking Spawn receipt. It is
 archived in `archive/dsh_adapter_v0_20261027/`. `packages/dsh` rewrites it
-against `@deepseek-ai/dsh` 0.2.1-rc.2 with the arrival semantics above: the
+against DSH with the arrival semantics above (`0.1.3` validates actual
+`0.2.2-rc.5` and `0.2.1-rc.2` dependencies): the
 model context is the DSH session surface, which the plugin edits into the Spine
 plan with standard surface replacements, so a session log restores without the
 plugin. Open, Close, Next, Spawn, user anchors and resume work; it has not yet

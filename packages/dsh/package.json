@@ -56,40 +56,46 @@
   },
   "engines": {
     "node": ">=22.19.0",
-    "dsh": "^0.2.1-rc.2 || ^0.2.2-0 || ^0.2.3-0 || ^0.2.4-0 || ^0.2.5-0 || ^0.2.6-0 || ^0.2.7-0 || ^0.2.8-0 || ^0.2.9-0"
+    "dsh": "0.2.1-rc.2 || 0.2.2-rc.5"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json && node scripts/build-client.mjs",
     "check": "tsc -p tsconfig.json --noEmit",
-    "test": "npm run build && node --test test/*.test.mjs"
+    "test": "npm run build && node --test test/*.test.mjs",
+    "test:hosts": "node scripts/test-host-matrix.mjs"
   },
   "dependencies": {
     "@spinejit/spine-sdk": "0.1.3",
     "zod": "^4.4.3"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "~4.0.5",
-    "@deepseek-ai/dsh-agent": "^0.2.1-rc.2 || ^0.2.2-0 || ^0.2.3-0 || ^0.2.4-0 || ^0.2.5-0 || ^0.2.6-0 || ^0.2.7-0 || ^0.2.8-0 || ^0.2.9-0",
-    "@deepseek-ai/dsh-llm": "^0.2.1-rc.2 || ^0.2.2-0 || ^0.2.3-0 || ^0.2.4-0 || ^0.2.5-0 || ^0.2.6-0 || ^0.2.7-0 || ^0.2.8-0 || ^0.2.9-0",
-    "@deepseek-ai/dsh-session": "^0.2.1-rc.2 || ^0.2.2-0 || ^0.2.3-0 || ^0.2.4-0 || ^0.2.5-0 || ^0.2.6-0 || ^0.2.7-0 || ^0.2.8-0 || ^0.2.9-0",
-    "@deepseek-ai/dsh-session-persistence": "^0.2.1-rc.2 || ^0.2.2-0 || ^0.2.3-0 || ^0.2.4-0 || ^0.2.5-0 || ^0.2.6-0 || ^0.2.7-0 || ^0.2.8-0 || ^0.2.9-0",
-    "@deepseek-ai/dsh-subagent": "^0.2.1-rc.2 || ^0.2.2-0 || ^0.2.3-0 || ^0.2.4-0 || ^0.2.5-0 || ^0.2.6-0 || ^0.2.7-0 || ^0.2.8-0 || ^0.2.9-0",
-    "@deepseek-ai/dsh-system-prompt": "^0.2.1-rc.2 || ^0.2.2-0 || ^0.2.3-0 || ^0.2.4-0 || ^0.2.5-0 || ^0.2.6-0 || ^0.2.7-0 || ^0.2.8-0 || ^0.2.9-0",
-    "@deepseek-ai/dsh-tools": "^0.2.1-rc.2 || ^0.2.2-0 || ^0.2.3-0 || ^0.2.4-0 || ^0.2.5-0 || ^0.2.6-0 || ^0.2.7-0 || ^0.2.8-0 || ^0.2.9-0"
+    "@deepseek-ai/cordis": "~4.0.5 || ~4.1.0",
+    "@deepseek-ai/dsh-agent": "0.2.1-rc.2 || 0.2.2-rc.5",
+    "@deepseek-ai/dsh-compaction": "0.2.1-rc.2 || 0.2.2-rc.5",
+    "@deepseek-ai/dsh-llm": "0.2.1-rc.2 || 0.2.2-rc.5",
+    "@deepseek-ai/dsh-session": "0.2.1-rc.2 || 0.2.2-rc.5",
+    "@deepseek-ai/dsh-session-persistence": "0.2.1-rc.2 || 0.2.2-rc.5",
+    "@deepseek-ai/dsh-subagent": "0.2.1-rc.2 || 0.2.2-rc.5",
+    "@deepseek-ai/dsh-system-prompt": "0.2.1-rc.2 || 0.2.2-rc.5",
+    "@deepseek-ai/dsh-token-meter": "0.2.1-rc.2 || 0.2.2-rc.5",
+    "@deepseek-ai/dsh-tools": "0.2.1-rc.2 || 0.2.2-rc.5"
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "~4.0.5",
-    "@deepseek-ai/cordis-plugin-loader": "~1.0.6",
-    "@deepseek-ai/dsh-agent": "0.2.1-rc.2",
-    "@deepseek-ai/dsh-agent-loop": "0.2.1-rc.2",
-    "@deepseek-ai/dsh-agent-loop-testkit": "0.2.1-rc.2",
-    "@deepseek-ai/dsh-llm": "0.2.1-rc.2",
-    "@deepseek-ai/dsh-session": "0.2.1-rc.2",
-    "@deepseek-ai/dsh-session-persistence": "0.2.1-rc.2",
-    "@deepseek-ai/dsh-session-persistence-jsonl": "0.2.1-rc.2",
-    "@deepseek-ai/dsh-subagent": "0.2.1-rc.2",
-    "@deepseek-ai/dsh-system-prompt": "0.2.1-rc.2",
-    "@deepseek-ai/dsh-tools": "0.2.1-rc.2",
+    "@deepseek-ai/cordis": "~4.1.0",
+    "@deepseek-ai/cordis-plugin-loader": "~1.1.0",
+    "@deepseek-ai/dsh-agent": "0.2.2-rc.5",
+    "@deepseek-ai/dsh-agent-loop": "0.2.2-rc.5",
+    "@deepseek-ai/dsh-agent-loop-testkit": "0.2.2-rc.5",
+    "@deepseek-ai/dsh-compaction": "0.2.2-rc.5",
+    "@deepseek-ai/dsh-compaction-image-offload": "0.2.2-rc.5",
+    "@deepseek-ai/dsh-llm": "0.2.2-rc.5",
+    "@deepseek-ai/dsh-session": "0.2.2-rc.5",
+    "@deepseek-ai/dsh-session-persistence": "0.2.2-rc.5",
+    "@deepseek-ai/dsh-session-persistence-jsonl": "0.2.2-rc.5",
+    "@deepseek-ai/dsh-subagent": "0.2.2-rc.5",
+    "@deepseek-ai/dsh-system-prompt": "0.2.2-rc.5",
+    "@deepseek-ai/dsh-token-meter": "0.2.2-rc.5",
+    "@deepseek-ai/dsh-tools": "0.2.2-rc.5",
     "esbuild": "0.28.2"
   }
 }

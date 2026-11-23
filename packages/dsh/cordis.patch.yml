@@ -1,5 +1,6 @@
-# @spinejit/dsh-spinejit bundle patch. Spine owns the model context, so the
-# plugins that rewrite it are switched off, then the spinejit row is added.
+# @spinejit/dsh-spinejit bundle patch. Spine owns message placement, so
+# disable plugins that replace or remove source messages. DSH image offload
+# can still mark image occurrences in place when a route exceeds its budget.
 - id: compaction-basic
   disabled: true
 
@@ -8,9 +9,6 @@
   disabled: true
 
 - id: tool-result-pruner
-  disabled: true
-
-- id: image-offload
   disabled: true
 
 - insert:

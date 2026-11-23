@@ -139,15 +139,17 @@ test("each change of the shown tree is recorded once, a resumed session records 
   }
 });
 
-test("a user bubble hides the [U<n>] line its text starts with, and only that", async () => {
-  const { client: { userAnchorRule: rule } } = await loadClient();
-  assert.deepEqual(rule.match("[U1]\nhow does it work?", 0), { id: "text", start: 0, end: 5, data: { text: "[U1]\n", display: "" } });
-  assert.deepEqual(rule.match("[U12]\n", 0), { id: "text", start: 0, end: 6, data: { text: "[U12]\n", display: "" } });
-  assert.equal(rule.match("[U1]\nhow", 5), undefined, "only at the start");
-  assert.equal(rule.match("see [U1]\nabove", 0), undefined);
-  assert.equal(rule.match("[U1] inline", 0), undefined, "the number is its own line");
-  assert.equal(rule.match("[Ux]\nnot a number", 0), undefined);
-  assert.equal(rule.match("plain", 0), undefined);
+test("the client leaves literal [U<n>] lines in user bubbles", async () => {
+  const { client } = await loadClient();
+  assert.equal(client.userAnchorRule, undefined);
+  client.apply({
+    slots: { inject: (_name, register) => register(), register: () => {} },
+    uiConversation: {
+      userText: { register: () => assert.fail("text-only rules cannot identify a stored anchor") },
+      events: { register: () => () => {} },
+    },
+    effect: (execute) => execute(),
+  });
 });
 
 /** dist/client.js as the web client's module loader runs it, with a JSX runtime that builds plain objects. */
@@ -171,13 +173,25 @@ test("the client bundle loads in the module loader and draws the whole tree in t
   assert.deepEqual(required, ["react/jsx-runtime"]);
   assert.deepEqual(client.inject, ["slots", "uiConversation"]);
   const registered = [];
-  const rules = [];
+  const definitions = [];
   client.apply({
     slots: { inject: (_name, register) => register(), register: (entry, component) => registered.push([entry, component]) },
-    uiConversation: { userText: { register: (rule) => { rules.push(rule); return () => {}; } } },
+    uiConversation: { events: { register: (definition) => { definitions.push(definition); return () => {}; } } },
     effect: (execute) => execute(),
   });
-  assert.deepEqual(rules, [client.userAnchorRule], "the user-anchor rule is registered");
+  assert.equal(definitions.length, 1);
+  const [emptyContext] = definitions;
+  assert.equal(emptyContext.target, "chat");
+  assert.equal(emptyContext.buildViewNode(), null);
+  assert.deepEqual(Object.keys(emptyContext.match), ["developer/message"]);
+  const match = emptyContext.match["developer/message"];
+  const developerEvent = (kind, content, seq = 12) => ({ seq, type: "developer/message", data: { message: { source: { kind }, content } } });
+  const marker = developerEvent("spine", []);
+  assert.deepEqual(match(marker), { id: "12", role: "start", exclusive: true });
+  assert.deepEqual(marker, developerEvent("spine", []), "the event is left intact");
+  assert.notEqual(match(developerEvent("spine", [], 13)).id, match(marker).id);
+  assert.equal(match(developerEvent("spine", [{ type: "text", text: "branch summary" }])), null);
+  assert.equal(match(developerEvent("time-context", [])), null);
   assert.deepEqual(registered.map(([entry]) => entry), [{ name: "conversation.input.dock", id: "spinejit", order: 30, registrant: "@spinejit/dsh-spinejit" }]);
   const Dock = registered[0][1];
   assert.equal(Dock({ useProjection: () => undefined }), null);

@@ -1,8 +1,10 @@
 # DSH SpineJIT
 
 SpineJIT context management for DeepSeek Harness (DSH), backed by the portable
-Spine SDK. It is developed against `@deepseek-ai/dsh` `0.2.1-rc.2`; a bundle
-loads it as the Cordis plugin `spinejit`.
+Spine SDK. Version `0.1.3` is developed against DSH `0.2.2-rc.5` and also
+validated against `0.2.1-rc.2`; a bundle loads it as the Cordis plugin `spinejit`.
+Development uses Cordis `~4.1.0` and Loader `~1.1.0`; the peer range also
+accepts Cordis `~4.0.5` for the older host. Other DSH releases are not claimed.
 
 ## Install
 
@@ -13,7 +15,7 @@ dsh plugin --profile web add @spinejit/dsh-spinejit
 dsh web
 ```
 
-`dsh plugin --profile <name> add` installs the package into `$DSH_HOME/profiles/<name>` and adds it to the profile's bundles. Its bundle patch disables `compaction-basic`, `command-compact`, `tool-result-pruner`, and `image-offload` (since Spine owns the context) and inserts the `spinejit` plugin. Verify with `dsh <name> --dump-config | grep spinejit`. For terminal use, add it to a profile that includes `@deepseek-harness-tui/dsh-tui`.
+`dsh plugin --profile <name> add` installs the package into `$DSH_HOME/profiles/<name>` and adds it to the profile's bundles. Its bundle patch disables `compaction-basic`, `command-compact`, and `tool-result-pruner` (since Spine owns structural context changes) and inserts the `spinejit` plugin. Native `image-offload` is left at the host/user setting: it marks individual images without moving Spine sources, so over-budget requests can recover. An explicit user disable remains respected. Verify with `dsh <name> --dump-config | grep spinejit`. For terminal use, add it to a profile that includes `@deepseek-harness-tui/dsh-tui`.
 
 ## How it works
 
@@ -90,8 +92,18 @@ dsh web
   Close or Next in the sampling that sees the last arrival is accepted: the
   commit joins the arrival first. A restarted parent receives a child that
   returned as completed and any other open birth as aborted, without waking.
-- A forked session's inherited prefix is its parent's namespace: births the
-  parent made there stay the parent's to join.
+- Ordinary Forks need not record `parentSession`. Each inherited segment is
+  replayed in a stable namespace, then continued in the new session's namespace;
+  inherited births stay with their original owner. Pending user sources and
+  synthetic Fork tool results are observed before the recovered plan is applied.
+- A child waiting for descendants retains its activation until input or Stop.
+  Stop also cancels accepted Spawn work that has not started yet: it records
+  aborted arrivals without starting children or waking the stopped parent.
+- Plugin reload reattaches existing agents, drains old child writers before
+  reading results, and preserves claimed arrivals across rejected steps.
+- Context replacements preserve individual slots for later summaries and log
+  token shadow prices. Input accounting includes uncached, cache-read and
+  cache-write tokens, which DSH reports as disjoint counts.
 
 ## The tree on screen
 
@@ -107,18 +119,20 @@ The tree Pi pins above its editor, drawn by the same code
   log whenever what its tree shows changes, and the session projection
   `spinejit` serves the latest one to clients.
 
-Sessions logged by dsh-spinejit 0.1.1 and earlier carry `[U<n>]` in the user
-text. For them the web and desktop client hide that line in the bubble:
-`dist/client.js` registers a user-text rule (`uiConversation.userText`). The
-terminal (dsh-tui) has no such seam and still shows it in those old sessions.
+Empty Spine developer markers and reserved slots are hidden from Chat only;
+other events and the model context are unchanged. User text is never stripped
+just because its first line looks like `[U<n>]`. Legacy inline-anchor sessions
+remain readable, but their old inline numbers may remain visible in bubbles.
 
 ## Not yet
 
 - A Spawn child that fails is not retried or continued; its arrival says why.
 - Spine tools must be called by the model directly, not from code (PTC).
-- Plugins that rewrite conversation context (compaction, tool-result pruning,
-  image offload) must not be loaded with this one. Spine owns the context; a
-  rewritten source makes the plugin refuse the next request.
+- Plugins that delete, move or summarize conversation sources (compaction and
+  tool-result pruning) must not run alongside Spine. Native image offload is
+  compatible; it preserves source identity and order.
+- This reliability release does not add private checkpoint WASM, a replacement
+  Web preset/compact command, read-only Spawn UI, or the redesigned tree UI.
 
 ## Tests
 
@@ -126,4 +140,30 @@ Tests run the production DSH AgentLoop, session store and official JSONL
 persistence with a scripted model adapter (`test/harness.mjs`), and load the
 plugin through the Cordis Loader as a DSH bundle does. Each scenario also
 checks that the official JSONL restore, without the plugin, equals the live
-context.
+context. The 79 tests cover images, ordinary/truncated Forks, pending-source
+recovery, literal user anchors, context slots, cached usage, nested Spawn,
+Stop races, and plugin reload. These are scripted headless tests, not a
+browser layout or paid-model end-to-end claim.
+
+From the workspace root:
+
+```bash
+npm install
+npm run check
+npm run build
+npm test
+# Fresh absolute output directory; no dependency symlinks or --force.
+npm run test:hosts -w @spinejit/dsh-spinejit -- /absolute/fresh/dsh-host-matrix
+npm pack -w @spinejit/dsh-spinejit --dry-run
+```
+
+The matrix installs each actual host with its matching Cordis/Loader, asserts
+resolved host versions, then checks, builds and tests the same source. CI runs
+it on Node `22.19.0` and `25`. Reliability fixes were contributed by
+[wxh (kabxx)](https://github.com/kabxx); upstream authorship is preserved in
+commit trailers.
+
+When upgrading an existing profile, check `--dump-config` for a leftover
+explicit `image-offload` disable. Removing this bundle's override does not
+undo a separately saved user setting. Checkpoint and Web preset migrations
+are deliberately outside this release.

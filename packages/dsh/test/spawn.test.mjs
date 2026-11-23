@@ -3,7 +3,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { mountDsh } from "./harness.mjs";
+import { mountDsh, reloadSpine } from "./harness.mjs";
+import { recoverChildren } from "../dist/spawn.js";
 import { arrival, call, memory, shown, result, closed } from "./shown.mjs";
 
 const X = "session-1:spawn:1.1.1";
@@ -148,6 +149,162 @@ test("Close and a child's end wait for their children: a reply before they arriv
   }
 });
 
+test("an idle Spawn child stays available until its descendants reply", async () => {
+  const [first, second] = [gate(), gate()];
+  const [G1, G2] = [`${X}:spawn:1.1.1`, `${X}:spawn:1.1.2`];
+  const dsh = await mountDsh({
+    "session-1": [[["spine_open", { goal: "A" }]], spawnXY, ...afterArrivals(2, "got both")],
+    [X]: [
+      [["spine_spawn", { tasks: [{ summary: "G1", prompt: "g1" }, { summary: "G2", prompt: "g2" }] }]],
+      ...afterArrivals(2, "x combined g1 and g2"),
+    ],
+    [Y]: ["y"],
+    [G1]: [first.after("g1 late")],
+    [G2]: [second.after("g2 late")],
+  });
+  try {
+    const agent = await dsh.run("start");
+    const getChild = () => dsh.ctx.agents.get(X);
+    await until(() => ends(dsh, X).length === 1 && requestsOf(dsh, G1).length === 1 && requestsOf(dsh, G2).length === 1);
+    const child = getChild();
+    assert.ok(child, "X is still present after it first yields");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(getChild(), child, "DSH retains an idle X while both descendants run");
+    assert.equal(child.status, "idle");
+    assert.equal(requestsOf(dsh, X).length, 2, "waiting does not start extra model requests");
+
+    first.open();
+    await until(() => ends(dsh, X).length === 2);
+    assert.ok(requestsOf(dsh, X).at(-1).includes(arrival("1.1.1", "completed", "g1 late")));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(getChild(), child, "X is retained again after processing just one result");
+    second.open();
+    const final = arrival("1.1.1", "completed", "x combined g1 and g2");
+    await until(() => requestsOf(dsh, "session-1").at(-1)?.includes(final));
+    await agent.whenIdle();
+    assert.ok(requestsOf(dsh, X).at(-1).includes(arrival("1.1.2", "completed", "g2 late")));
+    assert.equal(dsh.events(agent).filter((event) => event.type === "user/message" && event.data.source.kind === "spine-arrival" &&
+      event.data.source.arrival.producer.join(".") === "1.1.1").length, 1, "root receives X only once");
+  } finally {
+    first.open();
+    second.open();
+    await dsh.dispose();
+  }
+});
+
+test("a reused provider tool id does not make a child wait for an already completed Spawn", async () => {
+  const grandchildren = gate();
+  const [G1, G2] = [`${X}:spawn:1.1.1`, `${X}:spawn:1.1.2`];
+  const dsh = await mountDsh({
+    "session-1": [[["spine_open", { goal: "A" }]], spawnXY, ...afterArrivals(2, "got both")],
+    [X]: [
+      [["spine_spawn", { tasks: [{ summary: "G1", prompt: "g1" }, { summary: "G2", prompt: "g2" }] }]],
+      ...afterArrivals(2, [["read_fixture", {}]], "x final"),
+    ],
+    [Y]: ["y final"],
+    [G1]: [grandchildren.after("g1 final")],
+    [G2]: [grandchildren.after("g2 final")],
+  });
+  try {
+    const stream = dsh.adapter.stream.bind(dsh.adapter);
+    dsh.adapter.stream = async function* (request) {
+      for await (const event of stream(request)) {
+        if (request.sessionId === X && event.type === "block-end" && event.block.type === "tool-call") {
+          yield { ...event, block: { ...event.block, id: "reused-across-turns" } };
+        } else {
+          yield event;
+        }
+      }
+    };
+    dsh.ctx.tools.register({
+      name: "read_fixture", description: "Read a fixture.",
+      parameters: { type: "object", properties: {} },
+      output: { schema: { type: "object", properties: {} }, render: () => [{ type: "text", text: "read ok" }] },
+      execute: async () => ({}),
+    });
+
+    const agent = await dsh.run("start");
+    await until(() => ends(dsh, X).length === 1 && requestsOf(dsh, G1).length === 1 && requestsOf(dsh, G2).length === 1);
+    grandchildren.open();
+    await until(() => ends(dsh, X).length >= 2 && requestsOf(dsh, X).at(-1).includes("tool: read ok"));
+    const calls = dsh.events(X).filter((event) => event.type === "tool/call");
+    const results = dsh.events(X).filter((event) => event.type === "tool/result");
+    assert.deepEqual(calls.map((event) => event.data.name), ["spine_spawn", "read_fixture"]);
+    assert.notEqual(calls[0].data.turn, calls[1].data.turn);
+    assert.ok(results.every((event) => event.data.message.toolCallId === "reused-across-turns"));
+    assert.deepEqual(results.map((event) => event.sourceEventSeqs), calls.map((event) => [event.seq]));
+    const final = arrival("1.1.1", "completed", "x final");
+    await until(() => requestsOf(dsh, "session-1").at(-1)?.includes(final));
+    await agent.whenIdle();
+    // The turn event is visible in memory before the child closes its writer.
+    await until(() => dsh.ctx.agents.get(X) === undefined);
+    const recovered = await recoverChildren(dsh, agent, [{ producer: [1, 1, 1] }], async () => {});
+    assert.equal(recovered[0].outcome, "completed", "durable replay must match the original Spawn only once");
+    assert.equal(recovered[0].memory, "x final");
+
+    // Model a log from before DSH persisted exact call links, including a
+    // duplicate result to check that fallback matching consumes its call.
+    const persistence = dsh.ctx.sessionPersistence;
+    const legacy = { ctx: { sessionPersistence: {
+      stat: (id) => persistence.stat(id),
+      async open(id, mode) {
+        const handle = await persistence.open(id, mode);
+        return {
+          inheritedEventCount: handle.inheritedEventCount,
+          close: () => handle.close(),
+          async read() {
+            const data = await handle.read();
+            const [spawnResult] = results;
+            const events = data.events.map((event) => {
+              if (event.type === "tool/result") return { ...event, sourceEventSeqs: undefined };
+              if (event.type === "step/end" && event.seq > spawnResult.seq &&
+                event.data.turn === spawnResult.data.turn && event.data.step === spawnResult.data.step) {
+                return { ...spawnResult, seq: event.seq, sourceEventSeqs: undefined };
+              }
+              return event;
+            });
+            return { ...data, events };
+          },
+        };
+      },
+    } } };
+    const fallback = await recoverChildren(legacy, agent, [{ producer: [1, 1, 1] }], async () => {});
+    assert.deepEqual(fallback, recovered);
+  } finally {
+    grandchildren.open();
+    await dsh.dispose();
+  }
+});
+
+test("stopping an idle Spawn child cancels its descendants and returns a terminal arrival", async () => {
+  const [G1, G2] = [`${X}:spawn:1.1.1`, `${X}:spawn:1.1.2`];
+  const dsh = await mountDsh({
+    "session-1": [[["spine_open", { goal: "A" }]], spawnXY, ...afterArrivals(2, "noted stop")],
+    [X]: [[["spine_spawn", { tasks: [{ summary: "G1", prompt: "g1" }, { summary: "G2", prompt: "g2" }] }]], "waiting"],
+    [Y]: ["y"],
+    [G1]: [{ hang: true }],
+    [G2]: [{ hang: true }],
+  });
+  try {
+    const agent = await dsh.run("start");
+    await until(() => ends(dsh, X).length === 1 && requestsOf(dsh, G1).length === 1 && requestsOf(dsh, G2).length === 1);
+    if (typeof dsh.ctx.subagents.interruptByUser === "function") {
+      dsh.ctx.subagents.interruptByUser(X);
+    } else {
+      dsh.ctx.agents.get(X).cancel({ kind: "user" }, { keepInbox: true });
+    }
+    const stopped = arrival("1.1.1", "aborted", "spawn child was cancelled");
+    await until(() => requestsOf(dsh, "session-1").at(-1)?.includes(stopped));
+    await agent.whenIdle();
+    await until(() => ends(dsh, G1).length > 0 && ends(dsh, G2).length > 0);
+    assert.deepEqual(ends(dsh, G1), ["aborted"]);
+    assert.deepEqual(ends(dsh, G2), ["aborted"]);
+    assert.equal(requestsOf(dsh, X).length, 2, "Stop does not wake X to process canceled descendant results");
+  } finally {
+    await dsh.dispose();
+  }
+});
+
 test("a child whose model request fails arrives errored with the failure", async () => {
   const dsh = await mountDsh({
     "session-1": [[["spine_open", { goal: "A" }]], spawnXY, ...afterArrivals(2, "noted")],
@@ -198,6 +355,390 @@ test("stopping the parent stops its children: they arrive aborted and do not wak
     await dsh.dispose();
   }
 });
+
+test("reloading Spine wakes an idle parent with the results of its cancelled children", { timeout: 10000 }, async () => {
+  const dsh = await mountDsh({
+    "session-1": [[["spine_open", { goal: "A" }]], spawnXY, "waiting", "received"],
+    [X]: [{ hang: true }],
+    [Y]: [{ hang: true }],
+  });
+  try {
+    const parent = await dsh.run("start");
+    await until(() => requestsOf(dsh, X).length === 1 && requestsOf(dsh, Y).length === 1);
+    assert.deepEqual(ends(dsh, parent.id), ["completed"]);
+    assert.equal(requestsOf(dsh, parent.id).length, 3);
+    await reloadSpine(dsh, parent);
+    await until(() => ends(dsh, parent.id).length === 2);
+    await parent.whenIdle();
+
+    const results = requestsOf(dsh, parent.id).at(-1).filter((line) => line.startsWith("user: <spine_arrival"));
+    assert.deepEqual(results, [
+      arrival("1.1.1", "aborted", "the parent session restarted before this child returned"),
+      arrival("1.1.2", "aborted", "the parent session restarted before this child returned"),
+    ]);
+    assert.deepEqual(ends(dsh, parent.id), ["completed", "completed"]);
+    for (const id of [X, Y]) {
+      const [childRequest] = dsh.adapter.requests.filter((request) => request.sessionId === id);
+      assert.equal(childRequest.signal.aborted, true);
+    }
+    assert.equal(requestsOf(dsh, parent.id).length, 4, "one batch wakes the parent for one turn");
+    assert.equal(dsh.ctx.agents.get(X), undefined, "the old child has been disposed");
+    assert.equal(dsh.ctx.agents.get(Y), undefined, "the old child has been disposed");
+    assert.equal(parent.inbox.nextStep.length, 0);
+    assert.deepEqual(await dsh.restored(parent), parent.session.deriveMessages());
+  } finally {
+    await dsh.dispose();
+  }
+});
+
+test("reloading Spine wakes an idle parent whose waiting reply ran out of tokens", { timeout: 10000 }, async () => {
+  const dsh = await mountDsh({
+    "session-1": [[["spine_open", { goal: "A" }]], spawnXY, { text: "waiting", finish: "max-tokens" }, "received"],
+    [X]: [{ hang: true }],
+    [Y]: [{ hang: true }],
+  });
+  try {
+    const parent = await dsh.run("start");
+    await until(() => requestsOf(dsh, X).length === 1 && requestsOf(dsh, Y).length === 1);
+    assert.deepEqual(ends(dsh, parent.id), ["max-tokens"]);
+    await reloadSpine(dsh, parent);
+    await until(() => ends(dsh, parent.id).length === 2);
+    await parent.whenIdle();
+
+    assert.equal(requestsOf(dsh, parent.id).length, 4, "one batch wakes the parent for one turn");
+    assert.deepEqual(requestsOf(dsh, parent.id).at(-1).filter((line) => line.startsWith("user: <spine_arrival")), [
+      arrival("1.1.1", "aborted", "the parent session restarted before this child returned"),
+      arrival("1.1.2", "aborted", "the parent session restarted before this child returned"),
+    ]);
+    assert.deepEqual(ends(dsh, parent.id), ["max-tokens", "completed"]);
+    assert.deepEqual(await dsh.restored(parent), parent.session.deriveMessages());
+  } finally {
+    await dsh.dispose();
+  }
+});
+
+for (const stop of [false, true]) {
+  test(`reloading during the parent's waiting reply ${stop ? "respects Stop" : "recovers on its first idle"}`, { timeout: 10000 }, async () => {
+    const waiting = gate();
+    const dsh = await mountDsh({
+      "session-1": [[["spine_open", { goal: "A" }]], spawnXY, waiting.after("waiting"), "received", "received"],
+      [X]: [{ hang: true }],
+      [Y]: [{ hang: true }],
+    });
+    try {
+      const run = dsh.run("start");
+      await until(() => requestsOf(dsh, "session-1").length === 3 && requestsOf(dsh, X).length === 1 && requestsOf(dsh, Y).length === 1);
+      const parent = dsh.agent;
+      assert.equal(parent.status, "running");
+      await reloadSpine(dsh, parent);
+      assert.equal(parent.status, "running", "the waiting reply was in flight during remount");
+      assert.deepEqual(ends(dsh, parent.id), []);
+      if (stop) parent.cancel({ kind: "user" });
+      waiting.open();
+      await run;
+
+      if (stop) {
+        await until(() => dsh.ctx.agents.get(X) === undefined && dsh.ctx.agents.get(Y) === undefined);
+        assert.deepEqual(ends(dsh, parent.id), ["aborted"]);
+        assert.equal(requestsOf(dsh, parent.id).length, 3, "Stop leaves the parent idle");
+        await dsh.send(parent, "continue");
+      } else {
+        await until(() => ends(dsh, parent.id).length === 2);
+        await parent.whenIdle();
+        assert.deepEqual(ends(dsh, parent.id), ["completed", "completed"]);
+        assert.equal(requestsOf(dsh, parent.id).length, 4, "one batch wakes the parent for one turn");
+      }
+      assert.equal(ends(dsh, parent.id).at(-1), "completed");
+      assert.deepEqual(requestsOf(dsh, parent.id).at(-1).filter((line) => line.startsWith("user: <spine_arrival")), [
+        arrival("1.1.1", "aborted", "the parent session restarted before this child returned"),
+        arrival("1.1.2", "aborted", "the parent session restarted before this child returned"),
+      ]);
+      assert.deepEqual(await dsh.restored(parent), parent.session.deriveMessages());
+    } finally {
+      waiting.open();
+      await dsh.dispose();
+    }
+  });
+}
+
+for (const stop of [false, true]) {
+  test(`recovery waits for a completed child's log${stop ? " without overriding Stop" : " before waking the parent"}`, { timeout: 10000 }, async () => {
+    const reply = gate();
+    const stopping = gate();
+    const dsh = await mountDsh({
+      "session-1": [[["spine_open", { goal: "A" }]], spawnXY, "waiting", "received"],
+      [X]: [reply.after("x is 42")],
+      [Y]: [{ hang: true }],
+    });
+    let childStopping = false;
+    dsh.ctx.on("agent/turn-stopping", ({ agent }) => {
+      if (agent.id !== X) return;
+      childStopping = true;
+      return stopping.after()();
+    });
+    try {
+      const parent = await dsh.run("start");
+      reply.open();
+      await until(() => childStopping && requestsOf(dsh, Y).length === 1);
+      await reloadSpine(dsh, parent);
+      assert.equal(requestsOf(dsh, parent.id).length, 3, "the old child still owns its log");
+      if (stop) parent.cancel({ kind: "user" });
+      stopping.open();
+      await parent.whenIdle();
+
+      if (stop) {
+        assert.equal(requestsOf(dsh, parent.id).length, 3, "Stop wins over the background wake");
+        assert.equal(parent.inbox.nextStep.length, 2, "the results are parked for later input");
+        await dsh.send(parent, "continue");
+      }
+      const results = requestsOf(dsh, parent.id).at(-1).filter((line) => line.startsWith("user: <spine_arrival"));
+      assert.deepEqual(results, [
+        arrival("1.1.1", "completed", "x is 42"),
+        arrival("1.1.2", "aborted", "the parent session restarted before this child returned"),
+      ]);
+      assert.equal(requestsOf(dsh, parent.id).length, 4);
+      assert.deepEqual(await dsh.restored(parent), parent.session.deriveMessages());
+    } finally {
+      reply.open();
+      stopping.open();
+      await dsh.dispose();
+    }
+  });
+}
+
+for (const rejections of [0, 2]) {
+  test(`the first accepted input recovers child results after reload and ${rejections} rejected steps`, { timeout: 10000 }, async () => {
+    const reply = gate();
+    const stopping = gate();
+    const dsh = await mountDsh({
+      "session-1": [[["spine_open", { goal: "A" }]], spawnXY, { hang: true }, "received", "extra request"],
+      [X]: [reply.after("completed before reload")],
+      [Y]: [{ hang: true }],
+    });
+    let childStopping = false;
+    dsh.ctx.on("agent/turn-stopping", ({ agent }) => {
+      if (agent.id !== X) return;
+      childStopping = true;
+      return stopping.after()();
+    });
+    try {
+      const run = dsh.run("start");
+      await until(() => requestsOf(dsh, "session-1").length === 3 && requestsOf(dsh, Y).length === 1);
+      reply.open();
+      await until(() => childStopping);
+      const parent = dsh.agent;
+      parent.cancel({ kind: "user" });
+      await run;
+      assert.deepEqual(ends(dsh, parent.id), ["aborted"]);
+      const child = dsh.ctx.agents.get(X);
+      assert.ok(child);
+      await reloadSpine(dsh, parent);
+
+      let remaining = rejections;
+      const reject = dsh.ctx.on("agent/pre-step", ({ messages }, next) => {
+        if (remaining === 0 || !messages.some(({ source }) => source.kind === "user")) return next();
+        remaining -= 1;
+        return Promise.resolve({ kind: "reject" });
+      });
+      try {
+        const continued = dsh.send(parent, rejections === 0 ? "continue" : "blocked first");
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        assert.equal(dsh.ctx.agents.get(X), child, "the old child still owns the writer");
+        assert.equal(requestsOf(dsh, parent.id).length, 3, "pre-step recovery waits for the writer to close");
+        stopping.open();
+        await continued;
+        if (rejections > 0) {
+          assert.equal(parent.inbox.nextStep.length, 2, "both results were requeued after the first rejection");
+          await dsh.send(parent, "blocked again");
+          assert.equal(parent.inbox.nextStep.length, 2, "each result was requeued once after the next rejection");
+          assert.equal(requestsOf(dsh, parent.id).length, 3);
+          await dsh.send(parent, "continue");
+        }
+      } finally {
+        reject();
+      }
+
+      const continuedRequests = requestsOf(dsh, parent.id).slice(3);
+      assert.equal(continuedRequests.length, 1, "the first request after reload already has the results");
+      assert.ok(continuedRequests[0].includes("user: continue"));
+      const results = continuedRequests[0].filter((line) => line.startsWith("user: <spine_arrival"));
+      assert.deepEqual(results, [
+        arrival("1.1.1", "completed", "completed before reload"),
+        arrival("1.1.2", "aborted", "the parent session restarted before this child returned"),
+      ]);
+      assert.deepEqual(ends(dsh, parent.id), ["aborted", ...Array(rejections).fill("blocked"), "completed"]);
+      const producers = dsh.events(parent.id).flatMap((event) =>
+        event.type === "user/message" && event.data.source.kind === "spine-arrival" ? [event.data.source.arrival.producer.join(".")] : []);
+      assert.deepEqual(producers, ["1.1.1", "1.1.2"], "each result is logged once");
+      assert.deepEqual(await dsh.restored(parent), parent.session.deriveMessages());
+    } finally {
+      reply.open();
+      stopping.open();
+      await dsh.dispose();
+    }
+  });
+}
+
+for (const stop of [false, true]) {
+  test(`recovery parks arrivals after ${stop ? "stopping" : "releasing"} contended maintenance`, { timeout: 10000 }, async () => {
+    const maintenance = gate();
+    const dsh = await mountDsh({
+      "session-1": [[["spine_open", { goal: "A" }]], spawnXY, "waiting", "received"],
+      [X]: [{ hang: true }],
+      [Y]: [{ hang: true }],
+    });
+    let held;
+    let signal;
+    try {
+      const parent = await dsh.run("start");
+      await until(() => requestsOf(dsh, X).length === 1 && requestsOf(dsh, Y).length === 1);
+      held = parent.runMaintenance((active) => {
+        signal = active;
+        return maintenance.after()();
+      });
+      assert.equal(parent.status, "idle", "maintenance has no public running status");
+      await reloadSpine(dsh, parent);
+      await reloadSpine(dsh, parent);
+      assert.equal(parent.inbox.nextStep.length, 0, "contended recovery has not delivered results");
+      if (stop) parent.cancel({ kind: "user" }, { keepInbox: true });
+      assert.equal(signal.aborted, stop);
+      maintenance.open();
+      await held;
+      await until(() => parent.inbox.nextStep.length === 2);
+      await parent.whenIdle();
+      assert.equal(requestsOf(dsh, parent.id).length, 3, "unobserved maintenance completion never wakes the parent");
+      assert.deepEqual(parent.inbox.nextStep.map(({ source }) => source.arrival.producer.join(".")), ["1.1.1", "1.1.2"]);
+      assert.equal(dsh.ctx.agents.get(X), undefined);
+      assert.equal(dsh.ctx.agents.get(Y), undefined);
+
+      await dsh.send(parent, "continue");
+      const results = requestsOf(dsh, parent.id).at(-1).filter((line) => line.startsWith("user: <spine_arrival"));
+      assert.deepEqual(results, [
+        arrival("1.1.1", "aborted", "the parent session restarted before this child returned"),
+        arrival("1.1.2", "aborted", "the parent session restarted before this child returned"),
+      ]);
+      assert.equal(parent.inbox.nextStep.length, 0);
+      assert.deepEqual(ends(dsh, parent.id), ["completed", "completed"]);
+      assert.deepEqual(await dsh.restored(parent), parent.session.deriveMessages());
+    } finally {
+      maintenance.open();
+      await held;
+      await dsh.dispose();
+    }
+  });
+}
+
+test("a rejected step after reload does not lose or duplicate claimed Spawn arrivals", { timeout: 10000 }, async () => {
+  const dsh = await mountDsh({
+    "session-1": [[["spine_open", { goal: "A" }]], spawnXY, { hang: true }, "received"],
+    [X]: [{ hang: true }],
+    [Y]: [{ hang: true }],
+  });
+  try {
+    const run = dsh.run("start");
+    await until(() => requestsOf(dsh, X).length === 1 && requestsOf(dsh, Y).length === 1 && requestsOf(dsh, "session-1").length === 3);
+    const agent = dsh.agent;
+    agent.cancel({ kind: "user" });
+    await run;
+    await until(() => agent.inbox.nextStep.length === 2);
+    await reloadSpine(dsh, agent);
+
+    const reject = dsh.ctx.on("agent/pre-step", ({ messages }, next) => messages.some(({ source }) => source.kind === "spine-arrival")
+      ? Promise.resolve({ kind: "reject" }) : next());
+    try {
+      await dsh.send(agent, "this step will be blocked");
+      assert.equal(ends(dsh, agent.id).at(-1), "blocked");
+      assert.equal(requestsOf(dsh, agent.id).length, 3);
+    } finally {
+      reject();
+    }
+    await dsh.send(agent, "continue after the rejection");
+    const received = requestsOf(dsh, agent.id).at(-1).filter((line) => line.startsWith("user: <spine_arrival")).toSorted();
+    assert.equal(received.length, 2);
+    assert.match(received[0], /1\.1\.1/);
+    assert.match(received[1], /1\.1\.2/);
+    assert.equal(ends(dsh, agent.id).at(-1), "completed");
+  } finally {
+    await dsh.dispose();
+  }
+});
+
+for (const mode of ["warm", "restart", "rejected"]) {
+  test(`Stop cancels an accepted Spawn still queued behind another tool (${mode})`, async () => {
+    const first = await mountDsh({
+      "session-1": [[["spine_open", { goal: "A" }]], [...spawnXY, ["stop_probe", {}]], "changed direction", "noted"],
+      [X]: ["obsolete X result"],
+      [Y]: ["obsolete Y result"],
+    });
+    let resumed;
+    try {
+      let toolStarted;
+      const started = new Promise((resolve) => { toolStarted = resolve; });
+      first.ctx.tools.register({
+        name: "stop_probe",
+        description: "Wait for Stop",
+        parameters: { type: "object", properties: {} },
+        output: { schema: { type: "object", properties: {} }, render: () => [] },
+        async execute(_args, { signal }) {
+          toolStarted();
+          if (!signal.aborted) await new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true }));
+          signal.throwIfAborted();
+          return {};
+        },
+      });
+      const run = first.run("check login");
+      await started;
+      assert.ok(first.events(first.agent).some((event) => event.type === "tool/result"
+        && event.data.message.isError !== true
+        && event.data.message.content.some((block) => block.type === "text" && block.text.includes("Spine Spawn accepted"))));
+      first.agent.cancel({ kind: "user" });
+      await run;
+      assert.deepEqual(ends(first, "session-1"), ["aborted"]);
+      assert.deepEqual(first.adapter.requests.map((request) => request.sessionId), ["session-1", "session-1"]);
+
+      let dsh = first;
+      let parent = first.agent;
+      if (mode === "restart") {
+        resumed = await mountDsh(["changed direction", "noted"], { root: await first.crashed() });
+        dsh = resumed;
+        parent = await resumed.resume(parent.id);
+        assert.equal(dsh.adapter.requests.length, 0, "recovered arrivals do not wake the parent");
+      }
+      const before = dsh.adapter.requests.length;
+      if (mode === "rejected") {
+        const reject = dsh.ctx.on("agent/pre-step", () => ({ kind: "reject" }));
+        try {
+          for (const prompt of ["blocked followup", "blocked again"]) {
+            await dsh.send(parent, prompt);
+            assert.equal(dsh.adapter.requests.length, before);
+            assert.equal(ends(dsh, "session-1").at(-1), "blocked");
+            assert.equal(parent.inbox.nextStep.filter(({ source }) => source.kind === "spine-arrival").length, 2);
+          }
+        } finally {
+          reject();
+        }
+      }
+      await dsh.send(parent, "check the homepage instead");
+      assert.deepEqual(dsh.adapter.requests.filter((request) => request.sessionId !== "session-1"), [], "no obsolete child starts");
+      const [request] = dsh.adapter.requests.slice(before).map(shown);
+      assert.equal(dsh.adapter.requests.length, before + 1, "the next admitted request handles both the cancellations and the new user input");
+      assert.ok(request.includes("user: check the homepage instead"));
+      assert.deepEqual(request.filter((line) => line.startsWith("user: <spine_arrival")), [
+        arrival("1.1.1", "aborted", mode === "restart" ? "the parent session restarted before this child returned" : "spawn child was cancelled"),
+        arrival("1.1.2", "aborted", mode === "restart" ? "the parent session restarted before this child returned" : "spawn child was cancelled"),
+      ]);
+      const arrivals = dsh.events(parent).filter((event) => event.type === "user/message" && event.data.source.kind === "spine-arrival");
+      assert.deepEqual(arrivals.map(({ data }) => [data.source.arrival.producer.join("."), data.source.arrival.outcome]), [
+        ["1.1.1", "aborted"], ["1.1.2", "aborted"],
+      ]);
+      assert.deepEqual(await dsh.restored(parent), parent.session.deriveMessages(), "aborted results persist exactly once");
+    } finally {
+      first.agent?.cancel({ kind: "user" });
+      await resumed?.dispose();
+      await first.dispose();
+    }
+  });
+}
 
 test("a restarted parent reads each child's end from its log: none reruns or wakes it", async () => {
   // X replied, Y runs, Z's request failed, W waits for its own children.

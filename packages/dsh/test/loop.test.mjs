@@ -86,6 +86,32 @@ test("Next, nesting and a second user turn: Close keeps user messages, replies a
   ]);
 });
 
+test("nested branch memories fit after a reply that leaves both tasks open", async () => {
+  const run = await scenario([
+    [["spine_open", { goal: "parent" }]],
+    [["spine_open", { goal: "child" }]],
+    "reply with both tasks open",
+    [["spine_close", { memory: "child result" }]],
+    [["spine_next", { goal: "sibling", memory: "parent result" }]],
+    [["probe", {}]],
+    "done",
+  ], async (dsh) => {
+    const agent = await dsh.run("start");
+    await dsh.send(agent, "more");
+    return agent;
+  });
+  assert.deepEqual(run.ends, ["completed", "completed"]);
+  const child = memory("1.1.1", "child result");
+  const parent = memory("1.1", "parent result");
+  const before = run.requests.at(-2);
+  const after = run.requests.at(-1);
+  assert.ok(before.includes(child), "the child folds first");
+  assert.ok(!before.includes(parent), "the parent folds on the subsequent response");
+  const i = after.indexOf(child);
+  assert.ok(i >= 0, "the child memory survived the parent fold");
+  assert.equal(after[i + 1], parent, "the parent memory is a separate message after the child");
+});
+
 test("a Next sampling keeps its reasoning until the closed node folds; the folding sampling shows without it", async () => {
   const run = await scenario([
     { reasoning: "why open", calls: [["spine_open", { goal: "A" }]] },
@@ -121,14 +147,17 @@ test("runtime context DSH adds inside a node stays in place when the node closes
   const run = await scenario((dsh) => [
     [["spine_open", { goal: "A" }]],
     () => {
-      dsh().ctx.tools.register(probeTool);
       dsh().ctx.systemPrompt.context({ name: "probe", order: 150, text: "probe context" });
       return [["probe", {}]];
     },
     [["spine_close", { memory: "memA" }]],
     [["probe", {}]],
     "done",
-  ], (dsh) => dsh.run("start"));
+  ], (dsh) => {
+    // rc.5 freezes the tool catalog before the adapter sees this request.
+    dsh.ctx.tools.register(probeTool);
+    return dsh.run("start");
+  });
   assert.deepEqual(run.ends, ["completed"]);
   assert.equal(run.requests[2].at(-1), "context: …", "DSH added runtime context inside node A");
   assert.deepEqual(run.requests[3], [...run.requests[2], call("spine_close", { memory: "memA" }), result("spine_close")]);
@@ -139,16 +168,16 @@ test("runtime context DSH adds inside a node stays in place when the node closes
 });
 
 test("spine_close beside another tool call is a tool error; called alone it closes", async () => {
-  const run = await scenario((dsh) => [
+  const run = await scenario([
     [["spine_open", { goal: "A" }]],
-    () => {
-      dsh().ctx.tools.register(probeTool);
-      return [["spine_close", { memory: "memA" }], ["probe", {}]];
-    },
+    [["spine_close", { memory: "memA" }], ["probe", {}]],
     [["spine_close", { memory: "memA" }]],
     [["probe", {}]],
     "done",
-  ], (dsh) => dsh.run("start"));
+  ], (dsh) => {
+    dsh.ctx.tools.register(probeTool);
+    return dsh.run("start");
+  });
   assert.deepEqual(run.ends, ["completed"]);
   const results = run.events.filter((event) => event.type === "tool/result").map((event) => event.data.message);
   assert.deepEqual(results.map((message) => message.isError === true), [false, true, false, false, false]);
@@ -198,8 +227,7 @@ test("text cut off at max tokens is no reply: Close folds it into the node", asy
 
 test("bad Spine input and a second Spine call are tool errors; the agent keeps working", async () => {
   const run = await scenario([
-    [["spine_open", {}]],
-    [["spine_open", { goal: "A" }], ["spine_open", { goal: "B" }]],
+    [["spine_open", {}], ["spine_open", { goal: "A" }], ["spine_open", { goal: "B" }]],
     "ok",
   ], (dsh) => dsh.run("start"));
   assert.deepEqual(run.ends, ["completed"]);
@@ -207,8 +235,8 @@ test("bad Spine input and a second Spine call are tool errors; the agent keeps w
   assert.deepEqual(results.map((message) => message.isError === true), [true, false, true]);
   assert.match(results[0].content[0].text, /missing field `goal`/);
   assert.match(results[2].content[0].text, /only one Spine tool call is allowed per model response/);
-  // The admitted call's result carries the node it opened; the refused one's follows it.
-  assert.equal(run.requests[2].at(-2), result("spine_open", "1.1", "A"));
+  // Invalid input leaves the same sampling available for a valid call.
+  assert.equal(run.requests[1].at(-2), result("spine_open", "1.1", "A"));
 });
 
 test("Close with no open node is a tool error; the agent keeps working", async () => {
