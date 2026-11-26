@@ -52,7 +52,7 @@ jobs:
           node packages/plugin/scripts/verify-release.mjs "$RUNNER_TEMP/pi-clean-install" '${{ matrix.pi }}' "$VERSION"
       - name: Retain release evidence (including failures)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: pi-${{ matrix.pi }}-node-${{ matrix.node }}
           retention-days: 14
