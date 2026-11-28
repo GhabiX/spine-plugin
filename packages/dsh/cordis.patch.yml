@@ -1,11 +1,15 @@
-# @spinejit/dsh-spinejit bundle patch. Spine owns message placement, so
-# disable plugins that replace or remove source messages. DSH image offload
-# can still mark image occurrences in place when a route exceeds its budget.
+# @spinejit/dsh-spinejit bundle patch. Spine owns message placement, so every
+# writer that replaces or removes source messages must go through Spine.
+# DSH image offload can still mark image occurrences in place when a route
+# exceeds its budget.
+#
+# The root compaction service is SpineJIT's: it summarizes the context into a
+# checkpoint that is also a Spine epoch barrier. The native /compact command
+# stays and calls it. Agent presets compose their own compaction group in an
+# isolated realm that no id patch can reach (preset rows are not groups, and a
+# config patch replaces the whole preset); the SpineJIT engine binds each
+# agent's preset-scoped compaction seam and pruner to Spine at runtime.
 - id: compaction-basic
-  disabled: true
-
-# /compact follows the compaction service switched off above.
-- id: command-compact
   disabled: true
 
 - id: tool-result-pruner
@@ -14,3 +18,5 @@
 - insert:
     - id: spinejit
       name: '@spinejit/dsh-spinejit'
+    - id: spinejit-compact
+      name: '@spinejit/dsh-spinejit/compact'

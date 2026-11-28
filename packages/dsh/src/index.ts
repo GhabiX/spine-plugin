@@ -9,7 +9,7 @@ import type { ToolDefinition } from "@deepseek-ai/dsh-tools";
 import { isSpineToolName, loadSpineConfigToml, SpawnChildren, toArrival } from "@spinejit/spine-sdk/host";
 import { createNodeSpineRuntime, type SpineToolSpec } from "@spinejit/spine-sdk/node";
 
-import { SPINE_FEATURES, SpineAgent } from "./agent.js";
+import { provideSpineAttachment, SPINE_FEATURES, SpineAgent } from "./agent.js";
 import { userAnchorsProjection } from "./anchors.js";
 import { TreeDisplay, treeProjection } from "./display.js";
 import { arrivalMessage, SpineDshError } from "./events.js";
@@ -284,6 +284,8 @@ export function apply(ctx: Context): void {
     });
   }
 
+  // The compaction engine (./compact) reaches Spine state through this attachment.
+  ctx.effect(() => provideSpineAttachment({ ensure: (agent) => attachAgent(agent), signal: lifetime.signal }));
   ctx.on("agent/created", async ({ agent }) => { await attachAgent(agent); });
   ctx.on("agent/disposed", ({ agent }) => { waitingParents.get(agent)?.abort(); });
   ctx.on("agent/status", ({ agent, status }) => {

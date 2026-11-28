@@ -48,7 +48,8 @@ export const treeProjection = {
     const tree = treeSchema.safeParse(record.data);
     return tree.success ? tree.data : state;
   },
-  wire: { viewSchema: stateSchema, view: (state: SpineTree | null): SpineTree | null => state },
+  // The whole tree is heavy: clients read it from the session view, never from session/list summaries.
+  wire: { summary: false, viewSchema: stateSchema, view: (state: SpineTree | null): SpineTree | null => state },
 };
 
 /**

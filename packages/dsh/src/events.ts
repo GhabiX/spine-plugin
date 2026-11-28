@@ -5,13 +5,15 @@ import {
   type ContentBlock,
   type DeveloperMessage,
   type Message,
+  type TokenUsage,
   type UserMessage,
 } from "@deepseek-ai/dsh-llm";
 import { isAppendSurfaceEvent, type SessionEvent } from "@deepseek-ai/dsh-session";
-import type { SourceCharacter, SpawnArrival } from "@spinejit/spine-sdk";
+import type { CompactBarrier, SourceCharacter, SpawnArrival } from "@spinejit/spine-sdk";
 import { spineArrivalText } from "@spinejit/spine-sdk/host";
 
 import { withoutAnchor } from "./anchors.js";
+import { COMPACT_CHECKPOINT_PREFIX } from "./compact-format.js";
 
 declare module "@deepseek-ai/dsh-llm" {
   interface MessageSourceMap {
@@ -22,7 +24,19 @@ declare module "@deepseek-ai/dsh-llm" {
     spine: { kind: "spine"; sampling?: true };
     /** A Spawn child's result, delivered to the session that bore it. */
     "spine-arrival": { kind: "spine-arrival"; arrival: SpawnArrival };
+    "spine-compact": { kind: "spine-compact"; barrier: CompactBarrier; calls?: CompactCall[] };
   }
+}
+
+export interface CompactCall {
+  provider: string;
+  model: string;
+  usage?: TokenUsage;
+}
+
+export interface CompactSummary {
+  text: string;
+  calls: CompactCall[];
 }
 
 /**
@@ -125,6 +139,19 @@ export function arrivalOf(event: SessionEvent): SpawnArrival | null {
   if (event.type !== "user/message") return null;
   const source = event.data.source;
   return source.kind === "spine-arrival" ? source.arrival : null;
+}
+
+/** One durable event holds both the epoch barrier and its model-visible replacement. */
+export function compactMessage(barrier: CompactBarrier, summary: CompactSummary): UserMessage {
+  return createUserMessage({
+    content: [{ type: "text", text: `${COMPACT_CHECKPOINT_PREFIX}${summary.text}` }],
+    source: { kind: "spine-compact", barrier, calls: summary.calls },
+  });
+}
+
+export function compactBarrierOf(event: SessionEvent): CompactBarrier | undefined {
+  return event.type === "user/message" && event.data.source.kind === "spine-compact"
+    ? event.data.source.barrier : undefined;
 }
 
 /** A Spine item (node descriptor, memory, birth) as a model-visible user message. */
